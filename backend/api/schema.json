@@ -1,0 +1,219 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "C++ Memory Visualizer WebSocket Protocol",
+  "description": "Defines the bidirectional WebSocket message contract between the frontend and Go backend.",
+
+  "definitions": {
+    "ClientMessage": {
+      "type": "object",
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "string",
+          "enum": ["start", "step", "stop"],
+          "description": "The command to execute."
+        },
+        "code": {
+          "type": "string",
+          "description": "C++ source code. Required only for 'start' command."
+        }
+      }
+    },
+
+    "ServerMessage": {
+      "type": "object",
+      "required": ["event"],
+      "properties": {
+        "event": {
+          "type": "string",
+          "enum": ["status", "error", "snapshot", "finished"],
+          "description": "The type of server event."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["compiling", "launching", "ready", "stopped"],
+          "description": "Current state. Present when event is 'status'."
+        },
+        "message": {
+          "type": "string",
+          "description": "Error message. Present when event is 'error'."
+        },
+        "data": {
+          "$ref": "#/definitions/Snapshot",
+          "description": "Execution state snapshot. Present when event is 'snapshot'."
+        },
+        "exitCode": {
+          "type": "integer",
+          "description": "Process exit code. Present when event is 'finished'."
+        }
+      }
+    },
+
+    "Snapshot": {
+      "type": "object",
+      "required": ["step", "line", "stack", "heap"],
+      "properties": {
+        "step": {
+          "type": "integer",
+          "description": "Sequential step counter."
+        },
+        "line": {
+          "type": "integer",
+          "description": "Current source line number."
+        },
+        "file": {
+          "type": "string",
+          "description": "Source file name."
+        },
+        "stack": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/StackFrame" },
+          "description": "Call stack frames, from innermost to outermost."
+        },
+        "heap": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/HeapObject" },
+          "description": "Reachable heap-allocated objects."
+        }
+      }
+    },
+
+    "StackFrame": {
+      "type": "object",
+      "required": ["frameId", "functionName", "line", "locals"],
+      "properties": {
+        "frameId": {
+          "type": "string",
+          "description": "Frame identifier."
+        },
+        "functionName": {
+          "type": "string",
+          "description": "Name of the function."
+        },
+        "line": {
+          "type": "integer",
+          "description": "Source line within the function."
+        },
+        "file": {
+          "type": "string"
+        },
+        "locals": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Variable" },
+          "description": "Local variables in this frame."
+        },
+        "advancedData": {
+          "type": "object",
+          "description": "Optional structural data for complex types (trees, linked lists, etc.)."
+        }
+      }
+    },
+
+    "Variable": {
+      "type": "object",
+      "required": ["name", "type", "value"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "value": { "type": "string" },
+        "address": { "type": "string" },
+        "structType": {
+          "type": "string",
+          "enum": ["PRIMITIVE", "ARRAY_1D", "MATRIX_2D", "LINKED_LIST", "BINARY_TREE", "STL_CONTAINER"],
+          "description": "Polymorphic structural type tag."
+        },
+        "structuralLinks": {
+          "type": "object",
+          "description": "Registry-based structural links for LINKED_LIST or BINARY_TREE types.",
+          "properties": {
+            "type": { "type": "string" },
+            "root": { "type": "string" },
+            "nodes": {
+              "type": "object",
+              "description": "Address-keyed node registry.",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "value": { "type": "object" },
+                  "links": {
+                    "type": "object",
+                    "properties": {
+                      "next": { "type": "string" },
+                      "prev": { "type": "string" },
+                      "left": { "type": "string" },
+                      "right": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "stlFlattened": {
+          "type": "object",
+          "description": "Flattened logical representation of an STL container."
+        }
+      }
+    },
+
+    "HeapObject": {
+      "type": "object",
+      "required": ["address", "type", "isStl"],
+      "properties": {
+        "address": {
+          "type": "string",
+          "description": "Memory address of the allocation."
+        },
+        "type": {
+          "type": "string",
+          "description": "C++ type name."
+        },
+        "size": {
+          "type": "integer",
+          "description": "Size in bytes."
+        },
+        "isStl": {
+          "type": "boolean",
+          "description": "True if this is an STL container."
+        },
+        "structType": {
+          "type": "string",
+          "enum": ["PRIMITIVE", "ARRAY_1D", "MATRIX_2D", "LINKED_LIST", "BINARY_TREE", "STL_CONTAINER"],
+          "description": "Polymorphic structural type tag."
+        },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Variable" },
+          "description": "Struct fields."
+        },
+        "elements": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/STLElement" },
+          "description": "Container elements."
+        },
+        "structuralLinks": {
+          "type": "object",
+          "description": "Registry-based structural links for LINKED_LIST or BINARY_TREE."
+        },
+        "stlFlattened": {
+          "type": "object",
+          "description": "Flattened logical representation of an STL container."
+        },
+        "advancedData": {
+          "type": "object",
+          "description": "Optional structural data for complex types."
+        }
+      }
+    },
+
+    "STLElement": {
+      "type": "object",
+      "required": ["value"],
+      "properties": {
+        "index": { "type": "integer" },
+        "key": { "type": "string" },
+        "value": { "type": "string" }
+      }
+    }
+  }
+}

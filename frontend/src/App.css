@@ -1,0 +1,15 @@
+/* App-specific overrides (design system is in index.css) */
+
+/* Monaco editor line highlight */
+.highlighted-line {
+  background: rgba(99, 115, 255, 0.12) !important;
+  border-left: 3px solid var(--accent-blue) !important;
+}
+
+.highlighted-glyph {
+  background: var(--accent-blue);
+  border-radius: 50%;
+  margin-left: 4px;
+  width: 8px !important;
+  height: 8px !important;
+}
