@@ -633,14 +633,108 @@ func parseSTLOutput(output []string, typeName string) []STLElement {
 	for _, line := range output {
 		if strings.Contains(line, "value=\"") {
 			val := extractQuotedValue(line, "value")
-			elements = append(elements, STLElement{
-				Index: len(elements),
-				Value: val,
-			})
+			val = strings.TrimSpace(val)
+			if val == "" {
+				continue
+			}
+
+			// If GDB pretty printer outputs a single-line summary with " = { ... }" prefix, strip it
+			if idx := strings.Index(val, " = {"); idx >= 0 {
+				val = val[idx+4:]
+				val = strings.TrimSuffix(val, "}")
+				val = strings.TrimSpace(val)
+			} else if strings.HasPrefix(val, "{") {
+				val = strings.TrimPrefix(val, "{")
+				val = strings.TrimSuffix(val, "}")
+				val = strings.TrimSpace(val)
+			}
+
+			// If it's a simple value that doesn't contain standard map/vector assignment formatting, return it
+			if !strings.Contains(val, " = ") && !strings.Contains(val, "\n") && !strings.Contains(val, ",") {
+				elements = append(elements, STLElement{
+					Index: len(elements),
+					Value: val,
+				})
+				continue
+			}
+
+			// Split by newline or comma to get individual elements
+			var rawElements []string
+			if strings.Contains(val, "\n") {
+				rawElements = strings.Split(val, "\n")
+			} else {
+				// Single line split by comma (respecting quotes/brackets)
+				var builder strings.Builder
+				inQuote := false
+				escaped := false
+				for i := 0; i < len(val); i++ {
+					ch := val[i]
+					if escaped {
+						builder.WriteByte(ch)
+						escaped = false
+					} else if ch == '\\' {
+						builder.WriteByte(ch)
+						escaped = true
+					} else if ch == '"' {
+						inQuote = !inQuote
+						builder.WriteByte(ch)
+					} else if ch == ',' && !inQuote {
+						rawElements = append(rawElements, builder.String())
+						builder.Reset()
+					} else {
+						builder.WriteByte(ch)
+					}
+				}
+				if builder.Len() > 0 {
+					rawElements = append(rawElements, builder.String())
+				}
+			}
+
+			for _, l := range rawElements {
+				l = strings.TrimSpace(l)
+				l = strings.TrimSuffix(l, ",")
+				if l == "" || l == "{" || l == "}" || strings.HasSuffix(l, "{") {
+					continue
+				}
+
+				if eqIdx := strings.Index(l, " = "); eqIdx >= 0 {
+					keyPart := strings.TrimSpace(l[:eqIdx])
+					valPart := strings.TrimSpace(l[eqIdx+3:])
+
+					// Clean key (strip [ ], " ", ' ')
+					keyPart = strings.TrimPrefix(keyPart, "[")
+					keyPart = strings.TrimSuffix(keyPart, "]")
+					keyPart = strings.Trim(keyPart, "\"'")
+
+					// Clean value (strip " ", ' ')
+					valPart = strings.Trim(valPart, "\"'")
+
+					// Check if key is a number (array index)
+					if idx, err := strconv.Atoi(keyPart); err == nil {
+						elements = append(elements, STLElement{
+							Index: idx,
+							Value: valPart,
+						})
+					} else {
+						elements = append(elements, STLElement{
+							Key:   keyPart,
+							Value: valPart,
+						})
+					}
+				} else {
+					// No " = ", just value
+					valPart := strings.Trim(l, "\"'")
+					elements = append(elements, STLElement{
+						Index: len(elements),
+						Value: valPart,
+					})
+				}
+			}
 		}
 	}
 	return elements
 }
+
 
 // extractQuotedValue extracts the value from a key="value" pair in GDB/MI output.
 // It properly handles escaped inner quotes.

@@ -13,6 +13,8 @@ interface MemoryNodeData {
   line?: number;
   advancedData?: any;
   value?: string;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
   [key: string]: unknown;
 }
 
@@ -32,14 +34,46 @@ const MemoryNode: React.FC<NodeProps> = ({ data, id }) => {
       <Handle type="target" position={Position.Left} style={{ background: '#a855f7' }} />
 
       {/* Header */}
-      <div className={`memory-node__header memory-node__header--${category}`}>
-        {category === 'stack' ? '📦' : category === 'variable' ? '📍' : isStl ? '🗂️' : '💾'}{' '}
-        {label}
-        {category !== 'variable' && nodeData.line ? ` :${nodeData.line}` : ''}
+      <div
+        className={`memory-node__header memory-node__header--${category}`}
+        title={nodeData.rawType as string}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {category === 'stack' ? '📦' : category === 'variable' ? '📍' : isStl ? '🗂️' : '💾'}{' '}
+          {label}
+          {category !== 'variable' && nodeData.line ? ` :${nodeData.line}` : ''}
+        </span>
+        {isStl && nodeData.onToggleCollapse && (
+          <button
+            className="memory-node__collapse-toggle"
+            onClick={(e) => {
+              e.stopPropagation();
+              (nodeData.onToggleCollapse as () => void)();
+            }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'inherit',
+              cursor: 'pointer',
+              padding: '2px 4px',
+              fontFamily: 'inherit',
+              fontSize: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'transform 0.2s ease',
+              transform: nodeData.isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+            }}
+          >
+            ▼
+          </button>
+        )}
       </div>
 
       {/* Body */}
-      <div className="memory-node__body">
+      {!nodeData.isCollapsed && (
+        <div className="memory-node__body">
         {/* Variable nodes: compact single-row */}
         {category === 'variable' && variables.map((v: Variable) => (
           <div key={v.name} className="memory-node__row">
@@ -91,6 +125,31 @@ const MemoryNode: React.FC<NodeProps> = ({ data, id }) => {
             </span>
           </div>
         ))}
+
+        {/* Render STL Container (map, set, etc.) elements from advancedData */}
+        {advancedData && (advancedData.type === 'STL_CONTAINER' || advancedData.structType === 'STL_CONTAINER') && advancedData.elements && (
+          <table className="stl-map-table">
+            <thead>
+              <tr>
+                <th className="stl-map-header-key">Key</th>
+                <th className="stl-map-header-value">Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {advancedData.elements.map((el: any, idx: number) => (
+                <tr key={el.key ?? el.index ?? idx} className="stl-map-row">
+                  <td className="stl-map-cell-key">
+                    {el.key !== undefined ? String(el.key) : el.index !== undefined ? `[${el.index}]` : `[${idx}]`}
+                  </td>
+                  <td className="stl-map-cell-value">
+                    {String(el.value)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
 
         {/* Render 1D Vector/Array elements from advancedData */}
         {advancedData && (advancedData.type === 'ARRAY_1D' || advancedData.structType === 'ARRAY_1D') && advancedData.elements && (
@@ -164,6 +223,7 @@ const MemoryNode: React.FC<NodeProps> = ({ data, id }) => {
           </div>
         )}
       </div>
+    )}
 
       {/* Address footer for heap objects */}
       {address && (

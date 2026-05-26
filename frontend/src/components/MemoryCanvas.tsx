@@ -41,10 +41,11 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]): { nodes: Node[]; edg
     const data = node.data as any;
     const cat = data?.category;
     const isVar = cat === 'variable';
-    const isHeap = cat === 'heap' || cat === 'stl';
+    const isStl = cat === 'stl';
+    const isHeap = cat === 'heap' || isStl;
     g.setNode(node.id, {
-      width: isVar ? 160 : isHeap ? 220 : 220,
-      height: isVar ? 60 : isHeap ? 130 : 130,
+      width: isVar ? 160 : isStl ? 300 : isHeap ? 220 : 220,
+      height: isVar ? 60 : isStl ? 150 : isHeap ? 130 : 130,
     });
   });
   edges.forEach((edge) => {
@@ -57,9 +58,10 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]): { nodes: Node[]; edg
     const data = node.data as any;
     const cat = data?.category;
     const isVar = cat === 'variable';
-    const isHeap = cat === 'heap' || cat === 'stl';
-    const defaultW = isVar ? 160 : isHeap ? 220 : 220;
-    const defaultH = isVar ? 60 : isHeap ? 130 : 130;
+    const isStl = cat === 'stl';
+    const isHeap = cat === 'heap' || isStl;
+    const defaultW = isVar ? 160 : isStl ? 300 : isHeap ? 220 : 220;
+    const defaultH = isVar ? 60 : isStl ? 150 : isHeap ? 130 : 130;
     const dagreNode = g.node(node.id);
     if (dagreNode) {
       return {
@@ -105,13 +107,118 @@ const isSTLType = (type: string): boolean => {
          clean.startsWith('std::array');
 };
 
-function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] } {
+const getBaseType = (type: string): string => {
+  const clean = cleanType(type);
+  const ltIdx = clean.indexOf('<');
+  if (ltIdx >= 0) {
+    return clean.slice(0, ltIdx);
+  }
+  const bracketIdx = clean.indexOf('[');
+  if (bracketIdx >= 0) {
+    return clean.slice(0, bracketIdx) + '[]';
+  }
+  return clean;
+};
+
+const getCleanSTLTypeName = (type: string): string => {
+  if (!type) return '';
+  let clean = type.trim();
+  
+  // Replace basic_string templates with std::string
+  clean = clean.replace(/std::basic_string<char,\s*std::char_traits<char>,\s*std::allocator<char>\s*>/g, 'std::string');
+  clean = clean.replace(/std::basic_string<char>/g, 'std::string');
+  
+  // If it's a map or unordered_map, clean up comparator and allocator parameters
+  if (clean.startsWith('std::map') || clean.startsWith('std::unordered_map')) {
+    const isUnordered = clean.startsWith('std::unordered_map');
+    const prefix = isUnordered ? 'std::unordered_map' : 'std::map';
+    
+    // Find the content inside the outer < >
+    const startIdx = clean.indexOf('<');
+    const endIdx = clean.lastIndexOf('>');
+    if (startIdx >= 0 && endIdx > startIdx) {
+      const templateContent = clean.slice(startIdx + 1, endIdx);
+      
+      // Parse template arguments respecting nested brackets
+      const args: string[] = [];
+      let depth = 0;
+      let start = 0;
+      for (let i = 0; i < templateContent.length; i++) {
+        const char = templateContent[i];
+        if (char === '<') depth++;
+        else if (char === '>') depth--;
+        else if (char === ',' && depth === 0) {
+          args.push(templateContent.slice(start, i).trim());
+          start = i + 1;
+        }
+      }
+      if (start < templateContent.length) {
+        args.push(templateContent.slice(start).trim());
+      }
+      
+      // A map/unordered_map needs at least Key and Value types
+      if (args.length >= 2) {
+        return `${prefix}<${args[0]}, ${args[1]}>`;
+      }
+    }
+  }
+  
+  // For std::set or std::unordered_set, keep only the key type
+  if (clean.startsWith('std::set') || clean.startsWith('std::unordered_set')) {
+    const isUnordered = clean.startsWith('std::unordered_set');
+    const prefix = isUnordered ? 'std::unordered_set' : 'std::set';
+    const startIdx = clean.indexOf('<');
+    const endIdx = clean.lastIndexOf('>');
+    if (startIdx >= 0 && endIdx > startIdx) {
+      const templateContent = clean.slice(startIdx + 1, endIdx);
+      const args: string[] = [];
+      let depth = 0;
+      let start = 0;
+      for (let i = 0; i < templateContent.length; i++) {
+        const char = templateContent[i];
+        if (char === '<') depth++;
+        else if (char === '>') depth--;
+        else if (char === ',' && depth === 0) {
+          args.push(templateContent.slice(start, i).trim());
+          start = i + 1;
+        }
+      }
+      if (start < templateContent.length) {
+        args.push(templateContent.slice(start).trim());
+      }
+      if (args.length >= 1) {
+        return `${prefix}<${args[0]}>`;
+      }
+    }
+  }
+
+  // Fallback to cleanType
+  return cleanType(clean);
+};
+
+function buildNodesAndEdges(
+  snapshot: Snapshot,
+  collapsedNodes: Set<string>,
+  setCollapsedNodes: React.Dispatch<React.SetStateAction<Set<string>>>
+): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edgeMap = new Map<string, Edge>();
   const addressToNodeId = new Map<string, string>();
   const processedStructuralLinks = new Set<string>();
   const structuralNodeIds = new Set<string>();
   (snapshot.heap || []).forEach((obj) => addressToNodeId.set(obj.address, `heap-${obj.address}`));
+
+  // Precompute a map of address -> size for STL containers / arrays from snapshot.heap
+  const stlSizes = new Map<string, number>();
+  (snapshot.heap || []).forEach((obj) => {
+    if (obj.elements) {
+      stlSizes.set(obj.address, obj.elements.length);
+    } else if (obj.advancedData && obj.advancedData.elements) {
+      stlSizes.set(obj.address, obj.advancedData.elements.length);
+    } else if (obj.advancedData && obj.advancedData.rows) {
+      stlSizes.set(obj.address, obj.advancedData.rows.length);
+    }
+  });
 
   (snapshot.stack || []).forEach((frame) => {
     (frame.locals || []).forEach((local) => {
@@ -125,6 +232,17 @@ function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] 
       
       const targetAddr = isPointer ? (local.address || local.value) : (isSTLOrArray ? local.address : null);
 
+      let updatedLocal = { ...local };
+      if (isSTLOrArray && local.address) {
+        const size = stlSizes.get(local.address);
+        const baseType = getBaseType(local.type);
+        if (size !== undefined) {
+          updatedLocal.value = `${baseType} (size=${size})`;
+        } else {
+          updatedLocal.value = `${baseType} (empty)`;
+        }
+      }
+
       nodes.push({
         id: nodeId,
         type: 'memoryNode',
@@ -132,7 +250,7 @@ function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] 
         data: {
           label: local.name,
           category: 'variable',
-          variables: [local],
+          variables: [updatedLocal],
           address: local.address,
           frameId: frame.frameId,
           line: frame.line,
@@ -328,13 +446,26 @@ function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] 
       type: 'memoryNode',
       position: { x: 0, y: 0 },
       data: {
-        label: obj.type,
+        label: getCleanSTLTypeName(obj.type),
+        rawType: obj.type,
         category: obj.isStl ? 'stl' : 'heap',
         address: obj.address,
         variables: obj.fields,
         elements: obj.elements,
         isStl: obj.isStl,
         advancedData: obj.advancedData,
+        isCollapsed: collapsedNodes.has(nodeId),
+        onToggleCollapse: () => {
+          setCollapsedNodes((prev) => {
+            const next = new Set(prev);
+            if (next.has(nodeId)) {
+              next.delete(nodeId);
+            } else {
+              next.add(nodeId);
+            }
+            return next;
+          });
+        },
       },
     });
 
@@ -369,6 +500,7 @@ function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] 
 const MemoryCanvas: React.FC<MemoryCanvasProps> = ({ snapshot }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [collapsedNodes, setCollapsedNodes] = React.useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!snapshot) {
@@ -376,10 +508,10 @@ const MemoryCanvas: React.FC<MemoryCanvasProps> = ({ snapshot }) => {
       setEdges([]);
       return;
     }
-    const result = buildNodesAndEdges(snapshot);
+    const result = buildNodesAndEdges(snapshot, collapsedNodes, setCollapsedNodes);
     setNodes(result.nodes);
     setEdges(result.edges);
-  }, [snapshot, setNodes, setEdges]);
+  }, [snapshot, collapsedNodes, setNodes, setEdges]);
 
   if (!snapshot) {
     return (

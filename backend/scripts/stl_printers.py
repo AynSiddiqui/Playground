@@ -47,6 +47,54 @@ def get_clean_type_str(type_obj):
         return str(type_obj)
 
 
+def clean_gdb_value(val):
+    """Get a clean, human-readable string representation of a gdb.Value,
+    handling std::string, pointers, and primitives properly."""
+    try:
+        # Strip typedefs and references to get the base type
+        type_obj = val.type.strip_typedefs()
+        if type_obj.code == gdb.TYPE_CODE_REF:
+            val = val.referenced_value()
+            type_obj = val.type.strip_typedefs()
+    except Exception:
+        pass
+
+    # Try utilizing GDB's built-in pretty printers
+    try:
+        pp = gdb.default_visualizer(val)
+        if pp and hasattr(pp, 'to_string'):
+            res = pp.to_string()
+            if isinstance(res, gdb.Value):
+                try:
+                    return res.string()
+                except Exception:
+                    return str(res)
+            elif isinstance(res, str):
+                return res
+            else:
+                return str(res)
+    except Exception:
+        pass
+
+    # Handle standard pointer types: char* vs other pointers
+    try:
+        if val.type.code == gdb.TYPE_CODE_PTR:
+            target_type = val.type.target().strip_typedefs()
+            # If it's a character pointer, extract the string value
+            if target_type.code == gdb.TYPE_CODE_INT and target_type.sizeof == 1:
+                try:
+                    return val.string()
+                except Exception:
+                    pass
+            # For other pointers, keep standard GDB string representation (the hex address)
+            return str(val)
+    except Exception:
+        pass
+
+    # Default fallback
+    return str(val)
+
+
 def classify_variable(var):
     """Classify a GDB value into a structural type tag.
 
@@ -157,11 +205,11 @@ def resolve_structural_links(val, seen=None):
             for f in node_fields:
                 if f.name and f.name not in ("left", "right", "next", "prev"):
                     try:
-                        node_info["value"][f.name] = str(node_val[f.name])
+                        node_info["value"][f.name] = clean_gdb_value(node_val[f.name])
                     except Exception:
                         pass
         except Exception:
-            node_info["value"] = str(node_val)
+            node_info["value"] = clean_gdb_value(node_val)
 
         for link_name in ("next", "prev", "left", "right"):
             if link_name in field_names:
@@ -249,7 +297,7 @@ def flatten_stl_container(val):
                     row_size = int(row_finish - row_start)
                     row_elements = []
                     for j in range(min(row_size, 100)):
-                        row_elements.append(str(row_start[j]))
+                        row_elements.append(clean_gdb_value(row_start[j]))
                     rows.append(row_elements)
                 except Exception:
                     try:
@@ -257,12 +305,12 @@ def flatten_stl_container(val):
                         if row_pp and hasattr(row_pp, 'children'):
                             row_elements = []
                             for _, elem_val in row_pp.children():
-                                row_elements.append(str(elem_val))
+                                row_elements.append(clean_gdb_value(elem_val))
                             rows.append(row_elements)
                         else:
-                            rows.append([str(row_val)])
+                            rows.append([clean_gdb_value(row_val)])
                     except Exception:
-                        rows.append([str(row_val)])
+                        rows.append([clean_gdb_value(row_val)])
             result["rows"] = rows
             dims = [len(rows), max((len(r) for r in rows), default=0)]
             result["dimensions"] = dims
@@ -275,17 +323,17 @@ def flatten_stl_container(val):
                         row_pp = gdb.default_visualizer(row_val)
                         if row_pp and hasattr(row_pp, 'children'):
                             for _, elem_val in row_pp.children():
-                                row_elements.append(str(elem_val))
+                                row_elements.append(clean_gdb_value(elem_val))
                         else:
                             try:
                                 row_val_clean = row_val.type.strip_typedefs()
                                 if row_val_clean.code == gdb.TYPE_CODE_ARRAY:
                                     for j in range(row_val_clean.range()[1] + 1):
-                                        row_elements.append(str(row_val[j]))
+                                        row_elements.append(clean_gdb_value(row_val[j]))
                                 else:
-                                    row_elements.append(str(row_val))
+                                    row_elements.append(clean_gdb_value(row_val))
                             except Exception:
-                                row_elements.append(str(row_val))
+                                row_elements.append(clean_gdb_value(row_val))
                         rows.append(row_elements)
                     result["rows"] = rows
                     dims = [len(rows), max((len(r) for r in rows), default=0)]
@@ -301,9 +349,9 @@ def flatten_stl_container(val):
                                 row_val_clean = row_val.type.strip_typedefs()
                                 if row_val_clean.code == gdb.TYPE_CODE_ARRAY:
                                     for j in range(row_val_clean.range()[1] + 1):
-                                        row_elements.append(str(row_val[j]))
+                                        row_elements.append(clean_gdb_value(row_val[j]))
                                 else:
-                                    row_elements.append(str(row_val))
+                                    row_elements.append(clean_gdb_value(row_val))
                                 rows.append(row_elements)
                             result["rows"] = rows
                             dims = [len(rows), max((len(r) for r in rows), default=0)]
@@ -324,7 +372,7 @@ def flatten_stl_container(val):
             finish = impl["_M_finish"]
             size = int(finish - start)
             for i in range(min(size, 1000)):
-                elements.append({"index": i, "value": str(start[i])})
+                elements.append({"index": i, "value": clean_gdb_value(start[i])})
         except Exception:
             try:
                 pp = gdb.default_visualizer(val)
@@ -332,14 +380,14 @@ def flatten_stl_container(val):
                     for i, (name, child_val) in enumerate(pp.children()):
                         if i >= 1000:
                             break
-                        elements.append({"index": i, "value": str(child_val)})
+                        elements.append({"index": i, "value": clean_gdb_value(child_val)})
                 else:
                     # Fallback for raw arrays
                     try:
                         val_clean = val.type.strip_typedefs()
                         if val_clean.code == gdb.TYPE_CODE_ARRAY:
                             for i in range(min(val_clean.range()[1] + 1, 1000)):
-                                elements.append({"index": i, "value": str(val[i])})
+                                elements.append({"index": i, "value": clean_gdb_value(val[i])})
                     except Exception:
                         pass
             except Exception:
@@ -361,8 +409,8 @@ def flatten_stl_container(val):
                         if i + 1 < len(items):
                             val_name, val_val = items[i + 1]
                             elements.append({
-                                "key": str(key_val),
-                                "value": str(val_val)
+                                "key": clean_gdb_value(key_val),
+                                "value": clean_gdb_value(val_val)
                             })
                         i += 2
             except Exception:
@@ -374,14 +422,14 @@ def flatten_stl_container(val):
                     for i, (name, child_val) in enumerate(pp.children()):
                         if i >= 1000:
                             break
-                        elements.append({"value": str(child_val)})
+                        elements.append({"value": clean_gdb_value(child_val)})
             except Exception:
                 pass
         result["elements"] = elements
         return result
 
     if stl_type == "PRIMITIVE":
-        result["value"] = str(val)
+        result["value"] = clean_gdb_value(val)
         return result
 
     return None
@@ -433,7 +481,7 @@ class STLDumpCommand(gdb.Command):
         elif type_str.startswith("std::pair"):
             return self._extract_pair(val)
         else:
-            return {"type": type_str, "value": str(val)}
+            return {"type": type_str, "value": clean_gdb_value(val)}
 
     def _extract_vector(self, val):
         """Extract std::vector elements."""
@@ -449,11 +497,11 @@ class STLDumpCommand(gdb.Command):
                 elem = start[i]
                 elements.append({
                     "index": i,
-                    "value": str(elem)
+                    "value": clean_gdb_value(elem)
                 })
         except gdb.error:
             # Fallback: use the pretty printer string representation
-            elements = [{"index": 0, "value": str(val)}]
+            elements = [{"index": 0, "value": clean_gdb_value(val)}]
 
         return {
             "type": "std::vector",
@@ -476,14 +524,14 @@ class STLDumpCommand(gdb.Command):
                     if i + 1 < len(items):
                         val_name, val_val = items[i + 1]
                         elements.append({
-                            "key": str(key_val),
-                            "value": str(val_val)
+                            "key": clean_gdb_value(key_val),
+                            "value": clean_gdb_value(val_val)
                         })
                     i += 2
             else:
-                elements = [{"key": "?", "value": str(val)}]
+                elements = [{"key": "?", "value": clean_gdb_value(val)}]
         except gdb.error:
-            elements = [{"key": "?", "value": str(val)}]
+            elements = [{"key": "?", "value": clean_gdb_value(val)}]
 
         return {
             "type": "std::map",
@@ -502,10 +550,10 @@ class STLDumpCommand(gdb.Command):
                         break
                     elements.append({
                         "index": i,
-                        "value": str(child_val)
+                        "value": clean_gdb_value(child_val)
                     })
         except gdb.error:
-            elements = [{"index": 0, "value": str(val)}]
+            elements = [{"index": 0, "value": clean_gdb_value(val)}]
 
         return {
             "type": "std::set",
@@ -524,10 +572,10 @@ class STLDumpCommand(gdb.Command):
                         break
                     elements.append({
                         "index": i,
-                        "value": str(child_val)
+                        "value": clean_gdb_value(child_val)
                     })
         except gdb.error:
-            elements = [{"index": 0, "value": str(val)}]
+            elements = [{"index": 0, "value": clean_gdb_value(val)}]
 
         return {
             "type": str(val.type),
@@ -540,7 +588,7 @@ class STLDumpCommand(gdb.Command):
         try:
             return {
                 "type": "std::string",
-                "value": str(val)
+                "value": clean_gdb_value(val)
             }
         except gdb.error:
             return {"type": "std::string", "value": "?"}
@@ -561,7 +609,7 @@ class STLDumpCommand(gdb.Command):
                 finish = impl["_M_finish"]
                 size = int(finish - start)
                 for i in range(min(size, 1000)):
-                    elements.append({"index": i, "value": str(start[i])})
+                    elements.append({"index": i, "value": clean_gdb_value(start[i])})
             else:
                 # Fallback: use pretty printer
                 pp = gdb.default_visualizer(container)
@@ -569,9 +617,9 @@ class STLDumpCommand(gdb.Command):
                     for i, (name, child_val) in enumerate(pp.children()):
                         if i >= 1000:
                             break
-                        elements.append({"index": i, "value": str(child_val)})
+                        elements.append({"index": i, "value": clean_gdb_value(child_val)})
                 else:
-                    elements = [{"index": 0, "value": str(container)}]
+                    elements = [{"index": 0, "value": clean_gdb_value(container)}]
         except gdb.error:
             # Last resort fallback: use the pretty printer on the adapter itself
             try:
@@ -580,9 +628,9 @@ class STLDumpCommand(gdb.Command):
                     for i, (name, child_val) in enumerate(pp.children()):
                         if i >= 1000:
                             break
-                        elements.append({"index": i, "value": str(child_val)})
+                        elements.append({"index": i, "value": clean_gdb_value(child_val)})
             except gdb.error:
-                elements = [{"index": 0, "value": str(val)}]
+                elements = [{"index": 0, "value": clean_gdb_value(val)}]
 
         return {
             "type": adapter_type,
@@ -593,8 +641,8 @@ class STLDumpCommand(gdb.Command):
     def _extract_pair(self, val):
         """Extract std::pair first and second values."""
         try:
-            first = str(val["first"])
-            second = str(val["second"])
+            first = clean_gdb_value(val["first"])
+            second = clean_gdb_value(val["second"])
             return {
                 "type": "std::pair",
                 "elements": [
@@ -603,7 +651,7 @@ class STLDumpCommand(gdb.Command):
                 ]
             }
         except gdb.error:
-            return {"type": "std::pair", "value": str(val)}
+            return {"type": "std::pair", "value": clean_gdb_value(val)}
 
 class SnapshotCommand(gdb.Command):
     """Capture full execution state as JSON for the visualization frontend."""
@@ -676,7 +724,7 @@ class SnapshotCommand(gdb.Command):
                             local = {
                                 "name": str(sym.name),
                                 "type": str(sym.type),
-                                "value": str(val),
+                                "value": clean_gdb_value(val),
                                 "structType": struct_type,
                             }
                             # Add address for pointer types or complex value types
@@ -759,11 +807,11 @@ class AdvancedDumpCommand(gdb.Command):
             flat = flatten_stl_container(val)
             if flat:
                 return flat
-            return {"value": str(val)}
+            return {"value": clean_gdb_value(val)}
         if struct_type == "PRIMITIVE":
-            return {"value": str(val)}
+            return {"value": clean_gdb_value(val)}
 
-        return {"value": str(val)}
+        return {"value": clean_gdb_value(val)}
 
     def _extract_linked_list_registry(self, val, seen):
         """Extract a linked list as a flat address-keyed registry."""
@@ -775,7 +823,7 @@ class AdvancedDumpCommand(gdb.Command):
             addr = str(val.address)
         except Exception:
             addr = "?"
-        return {"type": "LINKED_LIST", "root": addr, "nodes": {addr: {"value": str(val), "links": {}}}}
+        return {"type": "LINKED_LIST", "root": addr, "nodes": {addr: {"value": clean_gdb_value(val), "links": {}}}}
 
     def _extract_binary_tree_registry(self, val, seen):
         """Extract a binary tree as a flat address-keyed registry."""
@@ -786,7 +834,7 @@ class AdvancedDumpCommand(gdb.Command):
             addr = str(val.address)
         except Exception:
             addr = "?"
-        return {"type": "BINARY_TREE", "root": addr, "nodes": {addr: {"value": str(val), "links": {}}}}
+        return {"type": "BINARY_TREE", "root": addr, "nodes": {addr: {"value": clean_gdb_value(val), "links": {}}}}
 
     def _extract_matrix(self, val, seen):
         flat = flatten_stl_container(val)
@@ -802,9 +850,9 @@ class AdvancedDumpCommand(gdb.Command):
                     row_val_type = row_val.type.strip_typedefs()
                     if row_val_type.code == gdb.TYPE_CODE_ARRAY:
                         for j in range(row_val_type.range()[1] + 1):
-                            row_elements.append(str(row_val[j]))
+                            row_elements.append(clean_gdb_value(row_val[j]))
                     else:
-                        row_elements.append(str(row_val))
+                        row_elements.append(clean_gdb_value(row_val))
                     elements.append(row_elements)
             else:
                 impl = val["_M_impl"]
@@ -827,14 +875,14 @@ class AdvancedDumpCommand(gdb.Command):
             val_type = val.type.strip_typedefs()
             if val_type.code == gdb.TYPE_CODE_ARRAY:
                 for i in range(val_type.range()[1] + 1):
-                    elements.append({"index": i, "value": str(val[i])})
+                    elements.append({"index": i, "value": clean_gdb_value(val[i])})
             else:
                 impl = val["_M_impl"]
                 start = impl["_M_start"]
                 finish = impl["_M_finish"]
                 size = int(finish - start)
                 for i in range(min(size, 100)):
-                    elements.append({"index": i, "value": str(start[i])})
+                    elements.append({"index": i, "value": clean_gdb_value(start[i])})
         except Exception:
             pass
         return {"type": "ARRAY_1D", "elements": elements}

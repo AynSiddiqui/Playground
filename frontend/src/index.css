@@ -613,3 +613,117 @@ body {
   width: 100%;
   height: 100%;
 }
+
+/* --- STL Map Node Key-Value Table --- */
+.stl-map-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.stl-map-table th {
+  text-align: left;
+  padding: 4px 12px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 9px;
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.stl-map-row {
+  transition: background var(--transition-fast);
+}
+
+.stl-map-row:hover {
+  background: rgba(99, 115, 255, 0.08);
+}
+
+.stl-map-cell-key {
+  padding: 6px 12px;
+  color: var(--text-accent);
+  font-weight: 500;
+  max-width: 100px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid rgba(99, 115, 255, 0.05);
+}
+
+.stl-map-cell-value {
+  padding: 6px 12px;
+  color: var(--accent-green);
+  font-weight: 500;
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid rgba(99, 115, 255, 0.05);
+  text-align: right;
+}
+
+.memory-node__collapse-toggle:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary) !important;
+}
+
+.memory-node__collapse-toggle:active {
+  transform: scale(0.9);
+}
+
+/* ─── STL Map / Container Table ─── */
+.stl-map-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  table-layout: fixed;
+}
+
+.stl-map-table thead {
+  border-bottom: 1px solid rgba(168, 85, 247, 0.25);
+}
+
+.stl-map-header-key,
+.stl-map-header-value {
+  width: 50%;
+  max-width: 150px;
+  padding: 4px 8px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, #94a3b8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stl-map-row:hover {
+  background: rgba(168, 85, 247, 0.08);
+}
+
+.stl-map-cell-key,
+.stl-map-cell-value {
+  width: 50%;
+  max-width: 150px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid rgba(99, 115, 255, 0.05);
+}
+
+.stl-map-cell-key {
+  color: var(--text-accent, #a78bfa);
+  font-weight: 500;
+}
+
+.stl-map-cell-value {
+  color: var(--text-primary, #e2e8f0);
+  text-align: right;
+}
