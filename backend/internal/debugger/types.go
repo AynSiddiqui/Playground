@@ -40,6 +40,7 @@ type HeapObject struct {
 	AdvancedData   interface{}     `json:"advancedData,omitempty"`
 	StructuralLinks interface{}    `json:"structuralLinks,omitempty"`
 	STLFlattened   interface{}     `json:"stlFlattened,omitempty"`
+	Value          string          `json:"value,omitempty"`
 }
 
 // STLElement represents a single element within an STL container.

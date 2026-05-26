@@ -78,6 +78,7 @@ export interface HeapObject {
   structuralLinks?: StructuralLinks;
   stlFlattened?: STLFlattened;
   advancedData?: any;
+  value?: string;
 }
 
 export interface STLElement {

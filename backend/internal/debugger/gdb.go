@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -171,7 +170,7 @@ func (g *GDBDebugger) sendCommand(cmd string) error {
 func (g *GDBDebugger) consumeUntilPrompt() []string {
 	var lines []string
 	var lineBuf string
-	buf := make([]byte, 1024)
+	buf := make([]byte, 4096)
 	for {
 		n, err := g.stdout.Read(buf)
 		if n > 0 {
@@ -338,8 +337,14 @@ func (g *GDBDebugger) extractHeapObjects(stack []StackFrame) []HeapObject {
 			if address != "" && address != "0x0" && address != "0" && address != "0x0000000000000000" {
 				ptrType := local.Type
 				// If the variable is a stack value (not a pointer), treat its address as a pointer to its type
-				if !strings.HasSuffix(strings.TrimSpace(ptrType), "*") {
-					ptrType = ptrType + "*"
+				if !isPointerType(ptrType) {
+					if idx := strings.Index(ptrType, "["); idx >= 0 {
+						base := ptrType[:idx]
+						brackets := ptrType[idx:]
+						ptrType = fmt.Sprintf("%s(*)%s", base, brackets)
+					} else {
+						ptrType = ptrType + "*"
+					}
 				}
 				obj := g.dereferencePointer(address, ptrType, seen)
 				if obj != nil {
@@ -369,13 +374,29 @@ func (g *GDBDebugger) dereferencePointer(address, ptrType string, seen map[strin
 	}
 	output := g.consumeUntilPrompt()
 
-	baseType := strings.TrimSuffix(ptrType, "*")
+	baseType := ptrType
+	if strings.Contains(ptrType, "(*)") {
+		baseType = strings.Replace(ptrType, "(*)", "", 1)
+	} else if strings.Contains(ptrType, "( * )") {
+		baseType = strings.Replace(ptrType, "( * )", "", 1)
+	} else {
+		baseType = strings.TrimSuffix(ptrType, "*")
+	}
 	baseType = strings.TrimSpace(baseType)
+
+	var rawVal string
+	for _, line := range output {
+		if strings.Contains(line, "value=\"") {
+			rawVal = extractQuotedValue(line, "value")
+			break
+		}
+	}
 
 	obj := &HeapObject{
 		Address: address,
 		Type:    baseType,
 		IsSTL:   isSTLType(baseType),
+		Value:   rawVal,
 	}
 
 	// Attempt to extract advanced structures (trees, lists, matrices) via custom python command
@@ -496,21 +517,42 @@ func parseDepth(output []string) int {
 	return 1
 }
 
-// localsRe matches individual variable blocks in GDB MI locals output.
-// Example input: locals=[{name="a",type="int",value="10"},{name="b",type="int",value="20"}]
-var localsRe = regexp.MustCompile(`name="([^"]*)",type="([^"]*)",value="([^"]*)"`)
-
+// parseLocals parses GDB MI locals output iteratively to handle missing value fields and quotes safely.
+// Example input: locals=[{name="a",type="int",value="10"},{name="b",type="int[5]"}]
 func parseLocals(output []string) []Variable {
 	var locals []Variable
 	for _, line := range output {
-		matches := localsRe.FindAllStringSubmatch(line, -1)
-		for _, m := range matches {
-			if len(m) == 4 && m[1] != "" {
-				locals = append(locals, Variable{
-					Name:  m[1],
-					Type:  m[2],
-					Value: m[3],
-				})
+		idx := strings.Index(line, "locals=[")
+		if idx < 0 {
+			continue
+		}
+		start := idx + len("locals=[")
+		
+		depth := 0
+		blockStart := -1
+		for i := start; i < len(line); i++ {
+			if line[i] == '{' {
+				if depth == 0 {
+					blockStart = i
+				}
+				depth++
+			} else if line[i] == '}' {
+				depth--
+				if depth == 0 && blockStart != -1 {
+					block := line[blockStart : i+1]
+					name := extractQuotedValue(block, "name")
+					typ := extractQuotedValue(block, "type")
+					val := extractQuotedValue(block, "value")
+					
+					if name != "" {
+						locals = append(locals, Variable{
+							Name:  name,
+							Type:  typ,
+							Value: val,
+						})
+					}
+					blockStart = -1
+				}
 			}
 		}
 	}
@@ -601,6 +643,7 @@ func parseSTLOutput(output []string, typeName string) []STLElement {
 }
 
 // extractQuotedValue extracts the value from a key="value" pair in GDB/MI output.
+// It properly handles escaped inner quotes.
 func extractQuotedValue(s, key string) string {
 	prefix := key + "=\""
 	idx := strings.Index(s, prefix)
@@ -608,23 +651,59 @@ func extractQuotedValue(s, key string) string {
 		return ""
 	}
 	start := idx + len(prefix)
-	end := strings.Index(s[start:], "\"")
+	
+	end := -1
+	for i := start; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++ // skip escaped char
+			continue
+		}
+		if s[i] == '"' {
+			end = i
+			break
+		}
+	}
 	if end < 0 {
 		return ""
 	}
-	return s[start : start+end]
+	
+	val := s[start:end]
+	val = strings.ReplaceAll(val, "\\\"", "\"")
+	val = strings.ReplaceAll(val, "\\n", "\n")
+	val = strings.ReplaceAll(val, "\\\\", "\\")
+	return val
+}
+
+func cleanType(t string) string {
+	t = strings.TrimSpace(t)
+	for {
+		old := t
+		t = strings.TrimPrefix(t, "const ")
+		t = strings.TrimPrefix(t, "volatile ")
+		t = strings.TrimPrefix(t, "class ")
+		t = strings.TrimPrefix(t, "struct ")
+		t = strings.TrimPrefix(t, "::")
+		t = strings.TrimSpace(t)
+		if t == old {
+			break
+		}
+	}
+	return t
 }
 
 func isPointerType(t string) bool {
-	return strings.HasSuffix(strings.TrimSpace(t), "*")
+	t = strings.TrimSpace(t)
+	return strings.HasSuffix(t, "*") || (strings.Contains(t, "(*)") && strings.Contains(t, "["))
 }
 
 func isSTLType(t string) bool {
-	t = strings.TrimSpace(t)
+	t = cleanType(t)
 	stlPrefixes := []string{
 		"std::vector", "std::map", "std::unordered_map",
 		"std::set", "std::unordered_set", "std::list",
 		"std::deque", "std::string", "std::basic_string",
+		"std::stack", "std::queue", "std::priority_queue",
+		"std::array",
 	}
 	for _, prefix := range stlPrefixes {
 		if strings.HasPrefix(t, prefix) {

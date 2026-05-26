@@ -28,6 +28,25 @@ STRUCTURAL_TYPES = {
 }
 
 
+def get_clean_type_str(type_obj):
+    """Robustly clean and qualify a GDB type to standard format."""
+    try:
+        t = type_obj.strip_typedefs()
+        if t.code == gdb.TYPE_CODE_REF:
+            t = t.target().strip_typedefs()
+        try:
+            t = t.unqualified()
+        except AttributeError:
+            pass
+        t_str = str(t)
+        t_str = t_str.replace("const ", "").replace("volatile ", "").strip()
+        if t_str.startswith("::"):
+            t_str = t_str[2:]
+        return t_str
+    except Exception:
+        return str(type_obj)
+
+
 def classify_variable(var):
     """Classify a GDB value into a structural type tag.
 
@@ -40,7 +59,8 @@ def classify_variable(var):
         return STRUCTURAL_TYPES["PRIMITIVE"]
 
     type_code = type_obj.code
-    type_str = str(type_obj)
+    t_str = get_clean_type_str(type_obj)
+    clean_str = "".join(t_str.split())
 
     stl_prefixes = [
         "std::vector", "std::map", "std::unordered_map",
@@ -50,8 +70,9 @@ def classify_variable(var):
         "std::pair", "std::array",
     ]
     for prefix in stl_prefixes:
-        if type_str.startswith(prefix):
-            if type_str.startswith("std::vector<std::vector"):
+        clean_prefix = "".join(prefix.split())
+        if clean_str.startswith(clean_prefix):
+            if clean_str.startswith("std::vector<std::vector") or clean_str.startswith("std::vector<std::vector<"):
                 return STRUCTURAL_TYPES["MATRIX_2D"]
             return STRUCTURAL_TYPES["STL_CONTAINER"]
 
@@ -182,39 +203,43 @@ def flatten_stl_container(val):
     metadata). Handles vectors, maps, sets, and other STL types.
     """
     try:
-        type_str = str(val.type.strip_typedefs())
+        type_str = get_clean_type_str(val.type)
     except Exception:
         return None
 
+    clean_str = "".join(type_str.split())
+    
     stl_type = None
-    if type_str.startswith("std::vector<std::vector"):
+    if clean_str.startswith("std::vector<std::vector"):
         stl_type = "MATRIX_2D"
-    elif type_str.startswith("std::vector"):
+    elif clean_str.startswith("std::vector"):
         stl_type = "ARRAY_1D"
-    elif type_str.startswith("std::map") or type_str.startswith("std::unordered_map"):
+    elif clean_str.startswith("std::map") or clean_str.startswith("std::unordered_map"):
         stl_type = "STL_CONTAINER"
-    elif type_str.startswith("std::set") or type_str.startswith("std::unordered_set"):
+    elif clean_str.startswith("std::set") or clean_str.startswith("std::unordered_set"):
         stl_type = "STL_CONTAINER"
-    elif type_str.startswith("std::list") or type_str.startswith("std::deque"):
+    elif clean_str.startswith("std::list") or clean_str.startswith("std::deque"):
         stl_type = "ARRAY_1D"
-    elif type_str.startswith("std::basic_string") or type_str.startswith("std::string"):
+    elif clean_str.startswith("std::basic_string") or clean_str.startswith("std::string"):
         stl_type = "PRIMITIVE"
-    elif type_str.startswith("std::stack") or type_str.startswith("std::queue") or type_str.startswith("std::priority_queue"):
+    elif clean_str.startswith("std::stack") or clean_str.startswith("std::queue") or clean_str.startswith("std::priority_queue"):
         stl_type = "ARRAY_1D"
-    elif type_str.startswith("std::pair"):
+    elif clean_str.startswith("std::pair"):
         stl_type = "STL_CONTAINER"
+    elif clean_str.startswith("std::array"):
+        stl_type = "ARRAY_1D"
     else:
         return None
 
     result = {"type": stl_type, "container_type": type_str}
 
     if stl_type == "MATRIX_2D":
+        rows = []
         try:
             impl = val["_M_impl"]
             start = impl["_M_start"]
             finish = impl["_M_finish"]
             size = int(finish - start)
-            rows = []
             for i in range(min(size, 100)):
                 row_val = start[i]
                 try:
@@ -227,12 +252,68 @@ def flatten_stl_container(val):
                         row_elements.append(str(row_start[j]))
                     rows.append(row_elements)
                 except Exception:
-                    rows.append([str(row_val)])
+                    try:
+                        row_pp = gdb.default_visualizer(row_val)
+                        if row_pp and hasattr(row_pp, 'children'):
+                            row_elements = []
+                            for _, elem_val in row_pp.children():
+                                row_elements.append(str(elem_val))
+                            rows.append(row_elements)
+                        else:
+                            rows.append([str(row_val)])
+                    except Exception:
+                        rows.append([str(row_val)])
             result["rows"] = rows
             dims = [len(rows), max((len(r) for r in rows), default=0)]
             result["dimensions"] = dims
         except Exception:
-            result["error"] = "failed to extract matrix"
+            try:
+                pp = gdb.default_visualizer(val)
+                if pp and hasattr(pp, 'children'):
+                    for _, row_val in pp.children():
+                        row_elements = []
+                        row_pp = gdb.default_visualizer(row_val)
+                        if row_pp and hasattr(row_pp, 'children'):
+                            for _, elem_val in row_pp.children():
+                                row_elements.append(str(elem_val))
+                        else:
+                            try:
+                                row_val_clean = row_val.type.strip_typedefs()
+                                if row_val_clean.code == gdb.TYPE_CODE_ARRAY:
+                                    for j in range(row_val_clean.range()[1] + 1):
+                                        row_elements.append(str(row_val[j]))
+                                else:
+                                    row_elements.append(str(row_val))
+                            except Exception:
+                                row_elements.append(str(row_val))
+                        rows.append(row_elements)
+                    result["rows"] = rows
+                    dims = [len(rows), max((len(r) for r in rows), default=0)]
+                    result["dimensions"] = dims
+                else:
+                    # Fallback for raw arrays
+                    try:
+                        val_clean = val.type.strip_typedefs()
+                        if val_clean.code == gdb.TYPE_CODE_ARRAY:
+                            for i in range(val_clean.range()[1] + 1):
+                                row_val = val[i]
+                                row_elements = []
+                                row_val_clean = row_val.type.strip_typedefs()
+                                if row_val_clean.code == gdb.TYPE_CODE_ARRAY:
+                                    for j in range(row_val_clean.range()[1] + 1):
+                                        row_elements.append(str(row_val[j]))
+                                else:
+                                    row_elements.append(str(row_val))
+                                rows.append(row_elements)
+                            result["rows"] = rows
+                            dims = [len(rows), max((len(r) for r in rows), default=0)]
+                            result["dimensions"] = dims
+                        else:
+                            result["error"] = "failed to extract matrix (no visualizer and not array)"
+                    except Exception as fallback_e:
+                        result["error"] = f"failed to extract matrix fallback: {str(fallback_e)}"
+            except Exception as e:
+                result["error"] = f"failed to extract matrix: {str(e)}"
         return result
 
     if stl_type == "ARRAY_1D":
@@ -244,13 +325,25 @@ def flatten_stl_container(val):
             size = int(finish - start)
             for i in range(min(size, 1000)):
                 elements.append({"index": i, "value": str(start[i])})
-        except gdb.error:
-            pp = gdb.default_visualizer(val)
-            if pp and hasattr(pp, 'children'):
-                for i, (name, child_val) in enumerate(pp.children()):
-                    if i >= 1000:
-                        break
-                    elements.append({"index": i, "value": str(child_val)})
+        except Exception:
+            try:
+                pp = gdb.default_visualizer(val)
+                if pp and hasattr(pp, 'children'):
+                    for i, (name, child_val) in enumerate(pp.children()):
+                        if i >= 1000:
+                            break
+                        elements.append({"index": i, "value": str(child_val)})
+                else:
+                    # Fallback for raw arrays
+                    try:
+                        val_clean = val.type.strip_typedefs()
+                        if val_clean.code == gdb.TYPE_CODE_ARRAY:
+                            for i in range(min(val_clean.range()[1] + 1, 1000)):
+                                elements.append({"index": i, "value": str(val[i])})
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         result["elements"] = elements
         result["dimensions"] = [len(elements)]
         return result
@@ -634,7 +727,14 @@ class AdvancedDumpCommand(gdb.Command):
         address = args[0]
         type_str = " ".join(args[1:])
         try:
-            val = gdb.parse_and_eval(f"*({type_str}*){address}")
+            if "[" in type_str and "(*)" not in type_str:
+                idx = type_str.find("[")
+                base = type_str[:idx]
+                brackets = type_str[idx:]
+                cast_type = f"{base}(*){brackets}"
+            else:
+                cast_type = f"{type_str}*"
+            val = gdb.parse_and_eval(f"*({cast_type}){address}")
             result = self._detect_and_extract(val, set())
             # Debug: print the assembled JSON to stderr
             print(json.dumps({"__debug_adv": result}), file=sys.stderr)
@@ -642,7 +742,7 @@ class AdvancedDumpCommand(gdb.Command):
             print(json.dumps(result))
             print("ADV_JSON_END")
         except gdb.error as e:
-            print("ADV_JSON_BEGIN\\n" + json.dumps({"error": str(e)}) + "\\nADV_JSON_END")
+            print("ADV_JSON_BEGIN\n" + json.dumps({"error": str(e)}) + "\nADV_JSON_END")
 
     def _detect_and_extract(self, val, seen):
         struct_type = classify_variable(val)
@@ -694,13 +794,26 @@ class AdvancedDumpCommand(gdb.Command):
             return flat
         elements = []
         try:
-            impl = val["_M_impl"]
-            start = impl["_M_start"]
-            finish = impl["_M_finish"]
-            size = int(finish - start)
-            for i in range(min(size, 100)):
-                elem = start[i]
-                elements.append(self._detect_and_extract(elem, seen))
+            val_type = val.type.strip_typedefs()
+            if val_type.code == gdb.TYPE_CODE_ARRAY:
+                for i in range(val_type.range()[1] + 1):
+                    row_val = val[i]
+                    row_elements = []
+                    row_val_type = row_val.type.strip_typedefs()
+                    if row_val_type.code == gdb.TYPE_CODE_ARRAY:
+                        for j in range(row_val_type.range()[1] + 1):
+                            row_elements.append(str(row_val[j]))
+                    else:
+                        row_elements.append(str(row_val))
+                    elements.append(row_elements)
+            else:
+                impl = val["_M_impl"]
+                start = impl["_M_start"]
+                finish = impl["_M_finish"]
+                size = int(finish - start)
+                for i in range(min(size, 100)):
+                    elem = start[i]
+                    elements.append(self._detect_and_extract(elem, seen))
         except Exception:
             pass
         return {"type": "MATRIX_2D", "rows": elements}
@@ -711,16 +824,17 @@ class AdvancedDumpCommand(gdb.Command):
             return flat
         elements = []
         try:
-            if val.type.code == gdb.TYPE_CODE_ARRAY:
-                for i in range(val.type.range()[1] + 1):
-                    elements.append(str(val[i]))
+            val_type = val.type.strip_typedefs()
+            if val_type.code == gdb.TYPE_CODE_ARRAY:
+                for i in range(val_type.range()[1] + 1):
+                    elements.append({"index": i, "value": str(val[i])})
             else:
                 impl = val["_M_impl"]
                 start = impl["_M_start"]
                 finish = impl["_M_finish"]
                 size = int(finish - start)
                 for i in range(min(size, 100)):
-                    elements.append(str(start[i]))
+                    elements.append({"index": i, "value": str(start[i])})
         except Exception:
             pass
         return {"type": "ARRAY_1D", "elements": elements}

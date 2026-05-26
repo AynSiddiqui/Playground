@@ -26,7 +26,10 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]): { nodes: Node[]; edg
   if (nodes.length === 0) return { nodes, edges };
 
   const hasBinaryTree = nodes.some(
-    (n) => (n.data as any)?.advancedData?.structure === 'tree_node'
+    (n) => {
+      const adv = (n.data as any)?.advancedData;
+      return adv?.type === 'BINARY_TREE';
+    }
   );
   const rankdir = hasBinaryTree ? 'TB' : 'LR';
 
@@ -73,6 +76,35 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]): { nodes: Node[]; edg
   return { nodes: layoutedNodes, edges };
 }
 
+const cleanType = (t: string): string => {
+  if (!t) return '';
+  let prev = '';
+  let curr = t.trim();
+  while (curr !== prev) {
+    prev = curr;
+    curr = curr.replace(/^(const|volatile|class|struct)\s+/, '');
+    curr = curr.replace(/^::/, '');
+    curr = curr.trim();
+  }
+  return curr;
+};
+
+const isSTLType = (type: string): boolean => {
+  if (!type) return false;
+  const clean = cleanType(type);
+  return clean.startsWith('std::vector') ||
+         clean.startsWith('std::map') ||
+         clean.startsWith('std::unordered_map') ||
+         clean.startsWith('std::set') ||
+         clean.startsWith('std::unordered_set') ||
+         clean.startsWith('std::list') ||
+         clean.startsWith('std::deque') ||
+         clean.startsWith('std::stack') ||
+         clean.startsWith('std::queue') ||
+         clean.startsWith('std::priority_queue') ||
+         clean.startsWith('std::array');
+};
+
 function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edgeMap = new Map<string, Edge>();
@@ -85,8 +117,13 @@ function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] 
     (frame.locals || []).forEach((local) => {
       const nodeId = `stack-${frame.frameId}-var-${local.name}`;
       const isPointer = local.type && local.type.includes('*');
-      if (local.address && local.address !== '0x0' && !isPointer) addressToNodeId.set(local.address, nodeId);
-      const targetAddr = isPointer ? (local.address || local.value) : null;
+      const isSTLOrArray = isSTLType(local.type) || (local.type && local.type.includes('['));
+      
+      if (local.address && local.address !== '0x0' && !isPointer && !isSTLOrArray) {
+        addressToNodeId.set(local.address, nodeId);
+      }
+      
+      const targetAddr = isPointer ? (local.address || local.value) : (isSTLOrArray ? local.address : null);
 
       nodes.push({
         id: nodeId,
@@ -119,7 +156,7 @@ function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] 
         }
       }
 
-      (local.fields || []).forEach((field) => {
+      ((local as any).fields || []).forEach((field: any) => {
         const targetAddr = field.address || field.value;
         if (targetAddr && targetAddr !== '0x0' && targetAddr !== '0') {
           const targetNodeId = addressToNodeId.get(targetAddr);
@@ -139,7 +176,7 @@ function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] 
         }
       });
 
-      const rawStackLinks = local.structuralLinks || local.advancedData;
+      const rawStackLinks = local.structuralLinks || (local as any).advancedData;
       if (rawStackLinks && (rawStackLinks.type === 'LINKED_LIST' || rawStackLinks.type === 'BINARY_TREE')) {
         const links = rawStackLinks;
         Object.entries(links.nodes).forEach(([addr]) => {
@@ -161,7 +198,7 @@ function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] 
             });
           }
         });
-        Object.entries(links.nodes).forEach(([addr, nodeInfo]) => {
+        Object.entries(links.nodes).forEach(([addr, nodeInfo]: [string, any]) => {
           const resolvedId = addressToNodeId.get(addr);
           if (!resolvedId) return;
           if (processedStructuralLinks.has(resolvedId)) return;
@@ -169,7 +206,7 @@ function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] 
           const nodeLinks = nodeInfo.links || {};
           const value = nodeInfo.value || {};
           const subVariables: Variable[] = Object.entries(value).map(([k, v]) => ({
-            name: k, type: typeof v, value: v,
+            name: k, type: typeof v, value: String(v),
           }));
 
           function addStructEdge(linkKey: string, color: string, edgeIdSuffix: string) {
@@ -249,7 +286,7 @@ function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] 
       const nodeLinks = nodeInfo.links || {};
       const value = nodeInfo.value || {};
       const subVariables: Variable[] = Object.entries(value).map(([k, v]) => ({
-        name: k, type: typeof v, value: v,
+        name: k, type: typeof v, value: String(v),
       }));
 
       function addStructEdge(linkKey: string, color: string) {
@@ -330,8 +367,8 @@ function buildNodesAndEdges(snapshot: Snapshot): { nodes: Node[]; edges: Edge[] 
 }
 
 const MemoryCanvas: React.FC<MemoryCanvasProps> = ({ snapshot }) => {
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
   useEffect(() => {
     if (!snapshot) {

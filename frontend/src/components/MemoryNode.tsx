@@ -12,6 +12,7 @@ interface MemoryNodeData {
   frameId?: string;
   line?: number;
   advancedData?: any;
+  value?: string;
   [key: string]: unknown;
 }
 
@@ -40,7 +41,7 @@ const MemoryNode: React.FC<NodeProps> = ({ data, id }) => {
       {/* Body */}
       <div className="memory-node__body">
         {/* Variable nodes: compact single-row */}
-        {category === 'variable' && variables.map((v: Variable, i: number) => (
+        {category === 'variable' && variables.map((v: Variable) => (
           <div key={v.name} className="memory-node__row">
             <span className="memory-node__type">{v.type}</span>
             <span className="memory-node__value">{v.value}</span>
@@ -77,7 +78,7 @@ const MemoryNode: React.FC<NodeProps> = ({ data, id }) => {
         ))}
 
         {/* Render STL container elements */}
-        {!advancedData && isStl && elements.map((el: STLElement) => (
+        {(!advancedData || advancedData.error) && isStl && elements.map((el: STLElement) => (
           <div key={el.key ?? el.index} className="memory-node__row">
             {el.key !== undefined && (
               <span className="memory-node__name">{el.key}</span>
@@ -91,23 +92,59 @@ const MemoryNode: React.FC<NodeProps> = ({ data, id }) => {
           </div>
         ))}
 
-        {/* Render Advanced Data Structures */}
-        {advancedData && advancedData.structure === 'matrix' && (
-          <div className="memory-node__matrix" style={{ display: 'grid', gridTemplateColumns: `repeat(${advancedData.rows[0]?.elements?.length || 1}, 1fr)`, gap: '4px', padding: '8px' }}>
-            {advancedData.rows.map((row: any, rIdx: number) =>
-              row.elements?.map((el: any, cIdx: number) => (
-                <div key={`${rIdx}-${cIdx}`} style={{ background: 'rgba(255,255,255,0.1)', padding: '4px', textAlign: 'center', borderRadius: '4px', fontFamily: 'var(--font-mono)' }}>
+        {/* Render 1D Vector/Array elements from advancedData */}
+        {advancedData && (advancedData.type === 'ARRAY_1D' || advancedData.structType === 'ARRAY_1D') && advancedData.elements && (
+          <div className="memory-node__array-1d" style={{ width: '100%' }}>
+            {advancedData.elements.map((el: any) => (
+              <div key={el.index} className="memory-node__row">
+                <span className="memory-node__name">[{el.index}]</span>
+                <span className="memory-node__value" style={{ marginLeft: 'auto' }}>
                   {el.value}
-                </div>
-              ))
-            )}
+                </span>
+              </div>
+            ))}
           </div>
         )}
 
-        {advancedData && (advancedData.structure === 'tree_node' || advancedData.structure === 'list_node') && (
+        {/* Render 2D Vector / Matrix elements */}
+        {advancedData && (advancedData.type === 'MATRIX_2D' || advancedData.structType === 'MATRIX_2D' || advancedData.structure === 'matrix') && advancedData.rows && (
+          <div className="memory-node__matrix" style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${advancedData.dimensions?.[1] || (Array.isArray(advancedData.rows[0]) ? advancedData.rows[0].length : (advancedData.rows[0]?.elements?.length || 1))}, 1fr)`,
+            gap: '4px',
+            padding: '8px',
+            width: '100%',
+            boxSizing: 'border-box'
+          }}>
+            {advancedData.rows.map((row: any, rIdx: number) => {
+              const rowElements = Array.isArray(row) ? row : (row.elements || []);
+              return rowElements.map((el: any, cIdx: number) => {
+                const val = (el && typeof el === 'object' && 'value' in el) ? el.value : String(el);
+                return (
+                  <div key={`${rIdx}-${cIdx}`} style={{
+                    background: 'rgba(255,255,255,0.1)',
+                    padding: '4px',
+                    textAlign: 'center',
+                    borderRadius: '4px',
+                    fontFamily: 'var(--font-mono)'
+                  }}>
+                    {val}
+                  </div>
+                );
+              });
+            })}
+          </div>
+        )}
+
+        {advancedData && (
+          advancedData.structure === 'tree_node' ||
+          advancedData.structure === 'list_node' ||
+          advancedData.type === 'BINARY_TREE' ||
+          advancedData.type === 'LINKED_LIST'
+        ) && (
            <div className="memory-node__advanced">
              {Object.entries(advancedData).map(([k, v]) => {
-                if (k !== 'structure' && k !== 'left' && k !== 'right' && k !== 'next') {
+                if (k !== 'structure' && k !== 'type' && k !== 'root' && k !== 'nodes' && k !== 'left' && k !== 'right' && k !== 'next') {
                   return (
                     <div key={k} className="memory-node__row">
                       <span className="memory-node__name">{k}</span>
@@ -118,6 +155,13 @@ const MemoryNode: React.FC<NodeProps> = ({ data, id }) => {
                 return null;
              })}
             </div>
+        )}
+
+        {/* Render raw evaluated value string as fallback if no structured data is available */}
+        {category === 'heap' && variables.length === 0 && (!elements || elements.length === 0) && (!advancedData || (!advancedData.elements && !advancedData.rows)) && nodeData.value && (
+          <div className="memory-node__row" style={{ fontStyle: 'italic', color: '#94a3b8' }}>
+            <span className="memory-node__value">{nodeData.value}</span>
+          </div>
         )}
       </div>
 
