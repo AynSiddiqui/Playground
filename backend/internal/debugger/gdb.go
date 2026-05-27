@@ -303,7 +303,7 @@ func (g *GDBDebugger) getFrame(frameNum int) (*StackFrame, error) {
 			frame.Locals[i].Address = local.Value
 		} else if isSTLType(local.Type) || strings.Contains(local.Type, "[") {
 			// For stack-allocated STLs and Arrays, get their memory address
-			evalCmd := fmt.Sprintf("-data-evaluate-expression &%s", local.Name)
+			evalCmd := fmt.Sprintf("-data-evaluate-expression \"&%s\"", local.Name)
 			if err := g.sendCommand(evalCmd); err == nil {
 				evalOut := g.consumeUntilPrompt()
 				for _, line := range evalOut {
@@ -336,8 +336,10 @@ func (g *GDBDebugger) extractHeapObjects(stack []StackFrame) []HeapObject {
 			address = strings.Split(address, " ")[0]
 			if address != "" && address != "0x0" && address != "0" && address != "0x0000000000000000" {
 				ptrType := local.Type
-				// If the variable is a stack value (not a pointer), treat its address as a pointer to its type
-				if !isPointerType(ptrType) {
+				if strings.HasSuffix(ptrType, "&") {
+					ptrType = strings.TrimSuffix(ptrType, "&")
+					ptrType = strings.TrimSpace(ptrType) + "*"
+				} else if !isPointerType(ptrType) {
 					if idx := strings.Index(ptrType, "["); idx >= 0 {
 						base := ptrType[:idx]
 						brackets := ptrType[idx:]
@@ -368,7 +370,7 @@ func (g *GDBDebugger) dereferencePointer(address, ptrType string, seen map[strin
 	seen[address] = true
 
 	// Dereference the pointer using GDB's -data-evaluate-expression
-	cmd := fmt.Sprintf("-data-evaluate-expression *(%s)%s", ptrType, address)
+	cmd := fmt.Sprintf("-data-evaluate-expression \"*(%s)%s\"", ptrType, address)
 	if err := g.sendCommand(cmd); err != nil {
 		return nil // Cannot read memory
 	}
@@ -400,7 +402,7 @@ func (g *GDBDebugger) dereferencePointer(address, ptrType string, seen map[strin
 	}
 
 	// Attempt to extract advanced structures (trees, lists, matrices) via custom python command
-	advCmd := fmt.Sprintf("-interpreter-exec console \"adv-dump %s %s\"", address, baseType)
+	advCmd := fmt.Sprintf("-interpreter-exec console \"adv-dump %s \\\"%s\\\"\"", address, baseType)
 	if err := g.sendCommand(advCmd); err == nil {
 		advOutput := g.consumeUntilPrompt()
 		obj.AdvancedData = g.parseAdvancedDump(advOutput)
@@ -461,7 +463,7 @@ func (g *GDBDebugger) chaseNodePointers(obj *HeapObject, seen map[string]bool, m
 // extractSTLElements uses GDB's Python pretty printers to get STL container contents.
 func (g *GDBDebugger) extractSTLElements(address, typeName string) []STLElement {
 	// Use print command which triggers pretty printers
-	cmd := fmt.Sprintf("-data-evaluate-expression *(%s*)%s", typeName, address)
+	cmd := fmt.Sprintf("-data-evaluate-expression \"*(%s*)%s\"", typeName, address)
 	if err := g.sendCommand(cmd); err != nil {
 		return nil
 	}
@@ -544,7 +546,7 @@ func parseLocals(output []string) []Variable {
 					typ := extractQuotedValue(block, "type")
 					val := extractQuotedValue(block, "value")
 					
-					if name != "" {
+					if name != "" && !strings.HasPrefix(name, "__") {
 						locals = append(locals, Variable{
 							Name:  name,
 							Type:  typ,

@@ -15,6 +15,16 @@ import gdb
 import json
 import sys
 
+# Force register libstdc++ pretty printers from common GCC paths
+try:
+    for path in ['/usr/local/share/gcc-16.1.0/python', '/usr/share/gcc/python']:
+        if path not in sys.path:
+            sys.path.insert(0, path)
+    from libstdcxx.v6.printers import register_libstdcxx_printers
+    register_libstdcxx_printers(None)
+except Exception as e:
+    sys.stderr.write(f"Failed to register libstdcxx pretty printers: {str(e)}\n")
+
 """
 Structural type tags for polymorphic memory layout visualization.
 """
@@ -408,13 +418,20 @@ def flatten_stl_container(val):
                         key_name, key_val = items[i]
                         if i + 1 < len(items):
                             val_name, val_val = items[i + 1]
+                            try:
+                                addr = str(key_val.address) if key_val.address is not None else "0x0"
+                            except Exception:
+                                addr = "0x0"
                             elements.append({
                                 "key": clean_gdb_value(key_val),
-                                "value": clean_gdb_value(val_val)
+                                "value": clean_gdb_value(val_val),
+                                "address": addr
                             })
                         i += 2
+                else:
+                    return None
             except Exception:
-                pass
+                return None
         else:
             try:
                 pp = gdb.default_visualizer(val)
@@ -523,15 +540,20 @@ class STLDumpCommand(gdb.Command):
                     key_name, key_val = items[i]
                     if i + 1 < len(items):
                         val_name, val_val = items[i + 1]
+                        try:
+                            addr = str(key_val.address) if key_val.address is not None else "0x0"
+                        except Exception:
+                            addr = "0x0"
                         elements.append({
                             "key": clean_gdb_value(key_val),
-                            "value": clean_gdb_value(val_val)
+                            "value": clean_gdb_value(val_val),
+                            "address": addr
                         })
                     i += 2
             else:
-                elements = [{"key": "?", "value": clean_gdb_value(val)}]
+                elements = [{"key": "?", "value": clean_gdb_value(val), "address": "0x0"}]
         except gdb.error:
-            elements = [{"key": "?", "value": clean_gdb_value(val)}]
+            elements = [{"key": "?", "value": clean_gdb_value(val), "address": "0x0"}]
 
         return {
             "type": "std::map",
