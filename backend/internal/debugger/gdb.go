@@ -799,7 +799,7 @@ func isSTLType(t string) bool {
 		"std::set", "std::unordered_set", "std::list",
 		"std::deque", "std::string", "std::basic_string",
 		"std::stack", "std::queue", "std::priority_queue",
-		"std::array",
+		"std::array", "std::pair",
 	}
 	for _, prefix := range stlPrefixes {
 		if strings.HasPrefix(t, prefix) {

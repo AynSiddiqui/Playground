@@ -62,3 +62,12 @@ The UI SHALL fully render the internal contents of Standard Template Library (ST
 - **THEN** the React Flow visualizer SHALL render the elements inside a CSS Grid matching the row and column dimensions of the structure
 - **AND** the UI SHALL draw an SVG pointer edge linking the stack variable to this matrix node
 
+#### Scenario: Visualizing Maps and Sets
+- **WHEN** a `std::map` or `std::unordered_map` is evaluated
+- **THEN** the React Flow visualizer SHALL render the key-value elements in a structured table layout with "Key" and "Value" column headers.
+- **AND** the UI SHALL draw an SVG pointer edge linking the stack variable to this map node.
+
+#### Scenario: Stack-allocated STL Container Summary
+- **WHEN** an STL container is stack-allocated and displayed as a local variable node
+- **THEN** its value display SHALL show a clean summary format including the container type and size (e.g. `std::map (size=N)`) rather than raw internal GDB tree structures.
+

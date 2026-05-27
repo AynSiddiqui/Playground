@@ -432,6 +432,31 @@ def flatten_stl_container(val):
                     return None
             except Exception:
                 return None
+        elif "pair" in type_str:
+            try:
+                first_val = val["first"]
+                second_val = val["second"]
+                try:
+                    first_addr = str(first_val.address) if first_val.address is not None else "0x0"
+                except Exception:
+                    first_addr = "0x0"
+                try:
+                    second_addr = str(second_val.address) if second_val.address is not None else "0x0"
+                except Exception:
+                    second_addr = "0x0"
+                
+                elements.append({
+                    "key": "first",
+                    "value": clean_gdb_value(first_val),
+                    "address": first_addr
+                })
+                elements.append({
+                    "key": "second",
+                    "value": clean_gdb_value(second_val),
+                    "address": second_addr
+                })
+            except Exception:
+                pass
         else:
             try:
                 pp = gdb.default_visualizer(val)

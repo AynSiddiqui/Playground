@@ -661,7 +661,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   border-bottom: 1px solid rgba(99, 115, 255, 0.05);
-  text-align: right;
+  text-align: left;
 }
 
 .memory-node__collapse-toggle:hover {
@@ -725,5 +725,5 @@ body {
 
 .stl-map-cell-value {
   color: var(--text-primary, #e2e8f0);
-  text-align: right;
+  text-align: left;
 }

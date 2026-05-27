@@ -104,6 +104,7 @@ const isSTLType = (type: string): boolean => {
          clean.startsWith('std::stack') ||
          clean.startsWith('std::queue') ||
          clean.startsWith('std::priority_queue') ||
+         clean.startsWith('std::pair') ||
          clean.startsWith('std::array');
 };
 
@@ -224,13 +225,14 @@ function buildNodesAndEdges(
     (frame.locals || []).forEach((local) => {
       const nodeId = `stack-${frame.frameId}-var-${local.name}`;
       const isPointer = local.type && local.type.includes('*');
+      const isReference = local.type && local.type.includes('&');
       const isSTLOrArray = isSTLType(local.type) || (local.type && local.type.includes('['));
       
-      if (local.address && local.address !== '0x0' && !isPointer && !isSTLOrArray) {
+      if (local.address && local.address !== '0x0' && !isPointer && !isReference && !isSTLOrArray) {
         addressToNodeId.set(local.address, nodeId);
       }
       
-      const targetAddr = isPointer ? (local.address || local.value) : (isSTLOrArray ? local.address : null);
+      const targetAddr = isPointer ? (local.address || local.value) : (isReference ? local.address : (isSTLOrArray ? local.address : null));
 
       let updatedLocal = { ...local };
       if (isSTLOrArray && local.address) {
