@@ -818,7 +818,82 @@ func cleanType(t string) string {
 			break
 		}
 	}
+
+	// Strip std::__cxx11:: → std::
+	t = strings.ReplaceAll(t, "std::__cxx11::", "std::")
+
+	// Replace basic_string with full allocator params → string
+	t = strings.ReplaceAll(t, "std::basic_string<char, std::char_traits<char>, std::allocator<char>>", "std::string")
+	t = strings.ReplaceAll(t, "std::basic_string<char>", "std::string")
+
+	// Strip default allocator/comparator from known STL containers
+	t = stripDefaultTemplateArgs(t)
+
 	return t
+}
+
+// containerKeepArgs defines how many template arguments to keep for each STL container.
+var containerKeepArgs = map[string]int{
+	"std::map":            2,
+	"std::unordered_map":  2,
+	"std::set":            1,
+	"std::unordered_set":  1,
+	"std::vector":         1,
+	"std::list":           1,
+	"std::deque":          1,
+	"std::stack":          1,
+	"std::queue":          1,
+	"std::priority_queue": 1,
+	"std::pair":           2,
+}
+
+// stripDefaultTemplateArgs removes trailing default allocator/comparator template
+// parameters from known STL container types, keeping only the semantically meaningful args.
+func stripDefaultTemplateArgs(t string) string {
+	ltIdx := strings.Index(t, "<")
+	if ltIdx < 0 {
+		return t
+	}
+	base := t[:ltIdx]
+	keep, ok := containerKeepArgs[base]
+	if !ok {
+		return t
+	}
+
+	endIdx := strings.LastIndex(t, ">")
+	if endIdx <= ltIdx {
+		return t
+	}
+
+	content := t[ltIdx+1 : endIdx]
+	var args []string
+	depth := 0
+	start := 0
+	for i := 0; i < len(content); i++ {
+		ch := content[i]
+		if ch == '<' {
+			depth++
+		} else if ch == '>' {
+			depth--
+		} else if ch == ',' && depth == 0 {
+			args = append(args, strings.TrimSpace(content[start:i]))
+			start = i + 1
+		}
+	}
+	if start < len(content) {
+		args = append(args, strings.TrimSpace(content[start:]))
+	}
+
+	if len(args) < keep {
+		return t
+	}
+
+	kept := args[:keep]
+	// Recursively clean nested template args (e.g., vector inside map)
+	for i, arg := range kept {
+		kept[i] = stripDefaultTemplateArgs(arg)
+	}
+	return base + "<" + strings.Join(kept, ", ") + ">"
 }
 
 // normalizeAddress ensures consistent address formatting for reliable matching.

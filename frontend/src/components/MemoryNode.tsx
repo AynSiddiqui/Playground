@@ -1,6 +1,7 @@
 import React from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { Variable, STLElement } from '../types';
+import { isSTLType } from '../utils/typeUtils';
 
 interface MemoryNodeData {
   label: string;
@@ -17,36 +18,6 @@ interface MemoryNodeData {
   onToggleCollapse?: () => void;
   [key: string]: unknown;
 }
-
-const cleanType = (t: string): string => {
-  if (!t) return '';
-  let prev = '';
-  let curr = t.trim();
-  while (curr !== prev) {
-    prev = curr;
-    curr = curr.replace(/^(const|volatile|class|struct)\s+/, '');
-    curr = curr.replace(/^::/, '');
-    curr = curr.trim();
-  }
-  return curr;
-};
-
-const isSTLType = (type: string): boolean => {
-  if (!type) return false;
-  const clean = cleanType(type);
-  return clean.startsWith('std::vector') ||
-         clean.startsWith('std::map') ||
-         clean.startsWith('std::unordered_map') ||
-         clean.startsWith('std::set') ||
-         clean.startsWith('std::unordered_set') ||
-         clean.startsWith('std::list') ||
-         clean.startsWith('std::deque') ||
-         clean.startsWith('std::stack') ||
-         clean.startsWith('std::queue') ||
-         clean.startsWith('std::priority_queue') ||
-         clean.startsWith('std::pair') ||
-         clean.startsWith('std::array');
-};
 
 /**
  * Custom React Flow node for rendering memory visualizations.
@@ -107,7 +78,7 @@ const MemoryNode: React.FC<NodeProps> = ({ data, id }) => {
         {/* Variable nodes: compact single-row */}
          {category === 'variable' && variables.map((v: Variable) => (
            <div key={v.name} className="memory-node__row">
-             <span className="memory-node__type">{v.type}</span>
+             <span className="memory-node__type" title={v.type}>{(v as any).cleanType || v.type}</span>
              <span className="memory-node__value">{v.value}</span>
              {(v.type.includes('*') || isSTLType(v.type)) && (
                <Handle

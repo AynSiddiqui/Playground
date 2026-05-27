@@ -20,6 +20,14 @@ The system SHALL utilize debugger Python APIs and pretty printers to extract the
 - **AND** the backend SHALL populate the HeapObject's elements via the Python pretty-printer extraction path
 - **AND** the backend SHALL populate the HeapObject's advanced data via the `adv-dump` Python command
 
+#### Scenario: Type string pre-cleaning
+- **WHEN** a type string contains `std::__cxx11::`
+- **THEN** the backend SHALL strip this namespace qualifier (e.g., `std::__cxx11::basic_string<...>` becomes `std::basic_string<...>`)
+
+#### Scenario: basic_string normalization
+- **WHEN** a type string contains `std::basic_string<char, std::char_traits<char>, std::allocator<char>>`
+- **THEN** the backend SHALL replace it with `std::string`
+
 ### Requirement: Complete Locals Parsing
 The debugger SHALL extract all variables from a `-stack-list-locals` MI output array, regardless of how many items are serialized on a single line.
 

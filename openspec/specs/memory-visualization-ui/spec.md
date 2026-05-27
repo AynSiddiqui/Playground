@@ -71,3 +71,12 @@ The UI SHALL fully render the internal contents of Standard Template Library (ST
 - **WHEN** an STL container is stack-allocated and displayed as a local variable node
 - **THEN** its value display SHALL show a clean summary format including the container type and size (e.g. `std::map (size=N)`) rather than raw internal GDB tree structures.
 
+#### Scenario: Simplified type display for containers
+- **WHEN** a `std::map<std::string, int>` or any other STL container is displayed
+- **THEN** the type label SHALL show only the meaningful template arguments (e.g., `std::map<std::string, int>`), not the full instantiation including `std::allocator`, `std::less`, or `std::__cxx11::` qualifiers
+
+#### Scenario: Stack variable type display
+- **WHEN** a stack-allocated STL container variable is shown as a distinct node
+- **THEN** the type shown in the variable row SHALL use the simplified type string
+- **AND** the raw GDB type SHALL be available on hover via a tooltip
+

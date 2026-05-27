@@ -15,6 +15,7 @@ import dagre from '@dagrejs/dagre';
 
 import type { Snapshot, Variable } from '../types';
 import { MemoryNode } from './MemoryNode';
+import { isSTLType, getBaseType, getCleanSTLTypeName } from '../utils/typeUtils';
 
 const nodeTypes = { memoryNode: MemoryNode };
 
@@ -78,125 +79,6 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]): { nodes: Node[]; edg
   return { nodes: layoutedNodes, edges };
 }
 
-const cleanType = (t: string): string => {
-  if (!t) return '';
-  let prev = '';
-  let curr = t.trim();
-  while (curr !== prev) {
-    prev = curr;
-    curr = curr.replace(/^(const|volatile|class|struct)\s+/, '');
-    curr = curr.replace(/^::/, '');
-    curr = curr.trim();
-  }
-  return curr;
-};
-
-const isSTLType = (type: string): boolean => {
-  if (!type) return false;
-  const clean = cleanType(type);
-  return clean.startsWith('std::vector') ||
-         clean.startsWith('std::map') ||
-         clean.startsWith('std::unordered_map') ||
-         clean.startsWith('std::set') ||
-         clean.startsWith('std::unordered_set') ||
-         clean.startsWith('std::list') ||
-         clean.startsWith('std::deque') ||
-         clean.startsWith('std::stack') ||
-         clean.startsWith('std::queue') ||
-         clean.startsWith('std::priority_queue') ||
-         clean.startsWith('std::pair') ||
-         clean.startsWith('std::array');
-};
-
-const getBaseType = (type: string): string => {
-  const clean = cleanType(type);
-  const ltIdx = clean.indexOf('<');
-  if (ltIdx >= 0) {
-    return clean.slice(0, ltIdx);
-  }
-  const bracketIdx = clean.indexOf('[');
-  if (bracketIdx >= 0) {
-    return clean.slice(0, bracketIdx) + '[]';
-  }
-  return clean;
-};
-
-const getCleanSTLTypeName = (type: string): string => {
-  if (!type) return '';
-  let clean = type.trim();
-  
-  // Replace basic_string templates with std::string
-  clean = clean.replace(/std::basic_string<char,\s*std::char_traits<char>,\s*std::allocator<char>\s*>/g, 'std::string');
-  clean = clean.replace(/std::basic_string<char>/g, 'std::string');
-  
-  // If it's a map or unordered_map, clean up comparator and allocator parameters
-  if (clean.startsWith('std::map') || clean.startsWith('std::unordered_map')) {
-    const isUnordered = clean.startsWith('std::unordered_map');
-    const prefix = isUnordered ? 'std::unordered_map' : 'std::map';
-    
-    // Find the content inside the outer < >
-    const startIdx = clean.indexOf('<');
-    const endIdx = clean.lastIndexOf('>');
-    if (startIdx >= 0 && endIdx > startIdx) {
-      const templateContent = clean.slice(startIdx + 1, endIdx);
-      
-      // Parse template arguments respecting nested brackets
-      const args: string[] = [];
-      let depth = 0;
-      let start = 0;
-      for (let i = 0; i < templateContent.length; i++) {
-        const char = templateContent[i];
-        if (char === '<') depth++;
-        else if (char === '>') depth--;
-        else if (char === ',' && depth === 0) {
-          args.push(templateContent.slice(start, i).trim());
-          start = i + 1;
-        }
-      }
-      if (start < templateContent.length) {
-        args.push(templateContent.slice(start).trim());
-      }
-      
-      // A map/unordered_map needs at least Key and Value types
-      if (args.length >= 2) {
-        return `${prefix}<${args[0]}, ${args[1]}>`;
-      }
-    }
-  }
-  
-  // For std::set or std::unordered_set, keep only the key type
-  if (clean.startsWith('std::set') || clean.startsWith('std::unordered_set')) {
-    const isUnordered = clean.startsWith('std::unordered_set');
-    const prefix = isUnordered ? 'std::unordered_set' : 'std::set';
-    const startIdx = clean.indexOf('<');
-    const endIdx = clean.lastIndexOf('>');
-    if (startIdx >= 0 && endIdx > startIdx) {
-      const templateContent = clean.slice(startIdx + 1, endIdx);
-      const args: string[] = [];
-      let depth = 0;
-      let start = 0;
-      for (let i = 0; i < templateContent.length; i++) {
-        const char = templateContent[i];
-        if (char === '<') depth++;
-        else if (char === '>') depth--;
-        else if (char === ',' && depth === 0) {
-          args.push(templateContent.slice(start, i).trim());
-          start = i + 1;
-        }
-      }
-      if (start < templateContent.length) {
-        args.push(templateContent.slice(start).trim());
-      }
-      if (args.length >= 1) {
-        return `${prefix}<${args[0]}>`;
-      }
-    }
-  }
-
-  // Fallback to cleanType
-  return cleanType(clean);
-};
-
 function buildNodesAndEdges(
   snapshot: Snapshot,
   collapsedNodes: Set<string>,
@@ -244,6 +126,7 @@ function buildNodesAndEdges(
           updatedLocal.value = `${baseType} (empty)`;
         }
       }
+      (updatedLocal as any).cleanType = getCleanSTLTypeName(local.type);
 
       nodes.push({
         id: nodeId,
