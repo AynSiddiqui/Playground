@@ -300,7 +300,8 @@ func (g *GDBDebugger) getFrame(frameNum int) (*StackFrame, error) {
 	// so they can be processed as independent heap objects
 	for i, local := range frame.Locals {
 		if isPointerType(local.Type) {
-			frame.Locals[i].Address = local.Value
+			frame.Locals[i].Address = normalizeAddress(local.Value)
+			log.Printf("[ADDR] Pointer var %q type=%q address=%q", local.Name, local.Type, frame.Locals[i].Address)
 		} else if isSTLType(local.Type) || strings.Contains(local.Type, "[") {
 			// For stack-allocated STLs and Arrays, get their memory address
 			evalCmd := fmt.Sprintf("-data-evaluate-expression \"&%s\"", local.Name)
@@ -309,15 +310,14 @@ func (g *GDBDebugger) getFrame(frameNum int) (*StackFrame, error) {
 				for _, line := range evalOut {
 					if strings.Contains(line, "value=\"") {
 						val := extractQuotedValue(line, "value")
-						// value usually looks like: 0x7fffffffe100
-						// We might need to split by space if it includes type info
-						parts := strings.Split(val, " ")
-						if len(parts) > 0 {
-							frame.Locals[i].Address = parts[0]
-						}
+						frame.Locals[i].Address = normalizeAddress(val)
+						log.Printf("[ADDR] STL/Array var %q type=%q raw_val=%q extracted_addr=%q", 
+							local.Name, local.Type, val, frame.Locals[i].Address)
 						break
 					}
 				}
+			} else {
+				log.Printf("[ADDR] Failed to get address for STL %q: %v", local.Name, err)
 			}
 		}
 	}
@@ -332,8 +332,8 @@ func (g *GDBDebugger) extractHeapObjects(stack []StackFrame) []HeapObject {
 
 	for _, frame := range stack {
 		for _, local := range frame.Locals {
-			address := local.Address
-			address = strings.Split(address, " ")[0]
+			address := normalizeAddress(local.Address)
+			log.Printf("[EXTRACT] var=%q type=%q original_addr=%q normalized_addr=%q", local.Name, local.Type, local.Address, address)
 			if address != "" && address != "0x0" && address != "0" && address != "0x0000000000000000" {
 				ptrType := local.Type
 				if strings.HasSuffix(ptrType, "&") {
@@ -348,13 +348,47 @@ func (g *GDBDebugger) extractHeapObjects(stack []StackFrame) []HeapObject {
 						ptrType = ptrType + "*"
 					}
 				}
-				obj := g.dereferencePointer(address, ptrType, seen)
-				if obj != nil {
-					// Recursively chase node pointers (next, left, right, etc.)
-					children := g.chaseNodePointers(obj, seen, 10)
-					heapObjects = append(heapObjects, *obj)
-					heapObjects = append(heapObjects, children...)
+			obj := g.dereferencePointer(address, ptrType, seen)
+			if obj != nil {
+				// Recursively chase node pointers (next, left, right, etc.)
+				children := g.chaseNodePointers(obj, seen, 10)
+				heapObjects = append(heapObjects, *obj)
+				heapObjects = append(heapObjects, children...)
+			} else if isSTLType(cleanType(local.Type)) {
+				log.Printf("[STL-FALLBACK] Triggered for var=%q type=%q (dereferencePointer failed)", local.Name, local.Type)
+				delete(seen, address)
+				cleanedType := cleanType(local.Type)
+				obj := &HeapObject{
+					Address: address,
+					Type:    cleanedType,
+					IsSTL:   true,
 				}
+				log.Printf("[STL-HEAP] Creating HeapObject address=%q type=%q", obj.Address, obj.Type)
+				advCmd := fmt.Sprintf("-interpreter-exec console \"adv-dump %s \\\"%s\\\"\"", address, cleanedType)
+				if err := g.sendCommand(advCmd); err == nil {
+					advOutput := g.consumeUntilPrompt()
+					obj.AdvancedData = g.parseAdvancedDump(advOutput)
+					if advData, ok := obj.AdvancedData.(map[string]interface{}); ok {
+						if elements, ok := advData["elements"].([]interface{}); ok {
+							for _, el := range elements {
+								if elMap, ok := el.(map[string]interface{}); ok {
+									stlEl := STLElement{Value: fmt.Sprintf("%v", elMap["value"])}
+									if key, ok := elMap["key"]; ok {
+										stlEl.Key = fmt.Sprintf("%v", key)
+										if idx, err := strconv.Atoi(stlEl.Key); err == nil {
+											stlEl.Index = idx
+											stlEl.Key = ""
+										}
+									}
+									obj.Elements = append(obj.Elements, stlEl)
+								}
+							}
+						}
+					}
+				}
+				log.Printf("[STL-HEAP-FINAL] HeapObject ready address=%q type=%q numElements=%d", obj.Address, obj.Type, len(obj.Elements))
+				heapObjects = append(heapObjects, *obj)
+			}
 			}
 		}
 	}
@@ -395,7 +429,7 @@ func (g *GDBDebugger) dereferencePointer(address, ptrType string, seen map[strin
 	}
 
 	obj := &HeapObject{
-		Address: address,
+		Address: normalizeAddress(address),
 		Type:    baseType,
 		IsSTL:   isSTLType(baseType),
 		Value:   rawVal,
@@ -785,6 +819,21 @@ func cleanType(t string) string {
 		}
 	}
 	return t
+}
+
+// normalizeAddress ensures consistent address formatting for reliable matching.
+// Handles cases where addresses may have trailing type info or spaces.
+func normalizeAddress(addr string) string {
+	// Trim whitespace
+	addr = strings.TrimSpace(addr)
+	// Split by space and take first part (in case GDB appended type info)
+	parts := strings.Split(addr, " ")
+	if len(parts) > 0 {
+		addr = parts[0]
+	}
+	// Lowercase hex digits for consistency
+	addr = strings.ToLower(addr)
+	return addr
 }
 
 func isPointerType(t string) bool {

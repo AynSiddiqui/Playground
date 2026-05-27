@@ -18,6 +18,36 @@ interface MemoryNodeData {
   [key: string]: unknown;
 }
 
+const cleanType = (t: string): string => {
+  if (!t) return '';
+  let prev = '';
+  let curr = t.trim();
+  while (curr !== prev) {
+    prev = curr;
+    curr = curr.replace(/^(const|volatile|class|struct)\s+/, '');
+    curr = curr.replace(/^::/, '');
+    curr = curr.trim();
+  }
+  return curr;
+};
+
+const isSTLType = (type: string): boolean => {
+  if (!type) return false;
+  const clean = cleanType(type);
+  return clean.startsWith('std::vector') ||
+         clean.startsWith('std::map') ||
+         clean.startsWith('std::unordered_map') ||
+         clean.startsWith('std::set') ||
+         clean.startsWith('std::unordered_set') ||
+         clean.startsWith('std::list') ||
+         clean.startsWith('std::deque') ||
+         clean.startsWith('std::stack') ||
+         clean.startsWith('std::queue') ||
+         clean.startsWith('std::priority_queue') ||
+         clean.startsWith('std::pair') ||
+         clean.startsWith('std::array');
+};
+
 /**
  * Custom React Flow node for rendering memory visualizations.
  * Renders differently based on category: stack frame, heap struct, or STL container.
@@ -75,20 +105,20 @@ const MemoryNode: React.FC<NodeProps> = ({ data, id }) => {
       {!nodeData.isCollapsed && (
         <div className="memory-node__body">
         {/* Variable nodes: compact single-row */}
-        {category === 'variable' && variables.map((v: Variable) => (
-          <div key={v.name} className="memory-node__row">
-            <span className="memory-node__type">{v.type}</span>
-            <span className="memory-node__value">{v.value}</span>
-            {v.type.includes('*') && (
-              <Handle
-                type="source"
-                position={Position.Right}
-                id={`${id}-${v.name}`}
-                style={{ background: '#22d3ee', top: 14 }}
-              />
-            )}
-          </div>
-        ))}
+         {category === 'variable' && variables.map((v: Variable) => (
+           <div key={v.name} className="memory-node__row">
+             <span className="memory-node__type">{v.type}</span>
+             <span className="memory-node__value">{v.value}</span>
+             {(v.type.includes('*') || isSTLType(v.type)) && (
+               <Handle
+                 type="source"
+                 position={Position.Right}
+                 id={`${id}-${v.name}`}
+                 style={{ background: isSTLType(v.type) ? '#f59e0b' : '#22d3ee', top: 14 }}
+               />
+             )}
+           </div>
+         ))}
 
         {/* Render struct fields / local variables (non-variable nodes) */}
         {category !== 'variable' && variables.map((v: Variable, i: number) => (

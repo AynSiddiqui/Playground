@@ -262,6 +262,7 @@ function buildNodesAndEdges(
       if (targetAddr && targetAddr !== '0x0' && targetAddr !== '0') {
         const targetNodeId = addressToNodeId.get(targetAddr);
         if (targetNodeId) {
+          const edgeColor = isSTLOrArray ? '#f59e0b' : '#ec4899';
           const edgeObj = {
             id: `edge-stack-var-${frame.frameId}-${local.name}`,
             source: nodeId,
@@ -269,8 +270,8 @@ function buildNodesAndEdges(
             target: targetNodeId,
             type: 'smoothstep',
             animated: true,
-            style: { stroke: '#ec4899', strokeWidth: 2 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#ec4899' },
+            style: { stroke: edgeColor, strokeWidth: 2 },
+            markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor },
           };
           edgeMap.set(edgeObj.id, edgeObj as Edge);
         }
