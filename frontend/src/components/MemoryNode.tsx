@@ -81,18 +81,18 @@ const MemoryNode: React.FC<NodeProps> = ({ data, id }) => {
              <span className="memory-node__type" title={v.type}>{(v as any).cleanType || v.type}</span>
              <span className="memory-node__value">{v.value}</span>
              {(v.type.includes('*') || isSTLType(v.type)) && (
-               <Handle
-                 type="source"
-                 position={Position.Right}
-                 id={`${id}-${v.name}`}
-                 style={{ background: isSTLType(v.type) ? '#f59e0b' : '#22d3ee', top: 14 }}
-               />
-             )}
+                <Handle
+                  type="source"
+                  position={Position.Right}
+                  id={`${id}-${v.name}`}
+                  style={{ background: isSTLType(v.type) ? '#f59e0b' : '#22d3ee', top: '50%', transform: 'translateY(-50%)' }}
+                />
+              )}
            </div>
          ))}
 
         {/* Render struct fields / local variables (non-variable nodes) */}
-        {category !== 'variable' && variables.map((v: Variable, i: number) => (
+        {category !== 'variable' && variables.map((v: Variable) => (
           <div key={v.name} className="memory-node__row">
             <span className="memory-node__name">{v.name}</span>
             <span className="memory-node__type">{v.type}</span>
@@ -105,7 +105,8 @@ const MemoryNode: React.FC<NodeProps> = ({ data, id }) => {
                 id={`${id}-${v.name}`}
                 style={{
                   background: '#22d3ee',
-                  top: `${50 + i * 32}px`,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
                 }}
               />
             )}

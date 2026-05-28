@@ -1,8 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useCallback } from 'react';
 import {
   ReactFlow,
   Background,
   BackgroundVariant,
+  Panel,
   useNodesState,
   useEdgesState,
   type Node,
@@ -17,13 +18,32 @@ import type { Snapshot, Variable } from '../types';
 import { MemoryNode } from './MemoryNode';
 import { isSTLType, getBaseType, getCleanSTLTypeName } from '../utils/typeUtils';
 
+type EdgeStyle = 'smoothstep' | 'straight' | 'default';
+
 const nodeTypes = { memoryNode: MemoryNode };
+
+function findSourceEdge(edges: Edge[], targetId: string): Edge | undefined {
+  return edges.find(e => e.target === targetId && e.id.includes('struct'));
+}
+
+function getParentRelativeOffset(edgeId: string): { x: number; y: number } | null {
+  if (edgeId.endsWith('-left')) return { x: -140, y: 180 };
+  if (edgeId.endsWith('-right')) return { x: 140, y: 180 };
+  if (edgeId.endsWith('-next')) return { x: 280, y: 0 };
+  if (edgeId.endsWith('-prev')) return { x: -280, y: 0 };
+  return null;
+}
 
 interface MemoryCanvasProps {
   snapshot: Snapshot | null;
 }
 
-function getLayoutedElements(nodes: Node[], edges: Edge[]): { nodes: Node[]; edges: Edge[] } {
+function getLayoutedElements(
+  nodes: Node[],
+  edges: Edge[],
+  manualPositions: Map<string, { x: number; y: number }>,
+  currentNodePositions: Map<string, { x: number; y: number }>
+): { nodes: Node[]; edges: Edge[] } {
   if (nodes.length === 0) return { nodes, edges };
 
   const hasBinaryTree = nodes.some(
@@ -56,6 +76,23 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]): { nodes: Node[]; edg
   dagre.layout(g);
 
   const layoutedNodes = nodes.map((node) => {
+    const cached = manualPositions.get(node.id);
+    if (cached) {
+      return { ...node, position: { x: cached.x, y: cached.y } };
+    }
+    const isNew = !currentNodePositions.has(node.id);
+    if (isNew) {
+      const incoming = findSourceEdge(edges, node.id);
+      if (incoming) {
+        const offset = getParentRelativeOffset(incoming.id);
+        if (offset) {
+          const parentPos = currentNodePositions.get(incoming.source);
+          if (parentPos) {
+            return { ...node, position: { x: parentPos.x + offset.x, y: parentPos.y + offset.y } };
+          }
+        }
+      }
+    }
     const data = node.data as any;
     const cat = data?.category;
     const isVar = cat === 'variable';
@@ -82,7 +119,10 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]): { nodes: Node[]; edg
 function buildNodesAndEdges(
   snapshot: Snapshot,
   collapsedNodes: Set<string>,
-  setCollapsedNodes: React.Dispatch<React.SetStateAction<Set<string>>>
+  setCollapsedNodes: React.Dispatch<React.SetStateAction<Set<string>>>,
+  edgeStyle: EdgeStyle,
+  manualPositions: Map<string, { x: number; y: number }>,
+  currentNodePositions: Map<string, { x: number; y: number }>
 ): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edgeMap = new Map<string, Edge>();
@@ -151,8 +191,8 @@ function buildNodesAndEdges(
             source: nodeId,
             sourceHandle: `${nodeId}-${local.name}`,
             target: targetNodeId,
-            type: 'smoothstep',
-            animated: true,
+            type: edgeStyle,
+            animated: edgeStyle === 'smoothstep',
             style: { stroke: edgeColor, strokeWidth: 2 },
             markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor },
           };
@@ -170,8 +210,8 @@ function buildNodesAndEdges(
               source: nodeId,
               sourceHandle: `${nodeId}-${field.name}`,
               target: targetNodeId,
-              type: 'smoothstep',
-              animated: true,
+              type: edgeStyle,
+              animated: edgeStyle === 'smoothstep',
               style: { stroke: '#22d3ee', strokeWidth: 2 },
               markerEnd: { type: MarkerType.ArrowClosed, color: '#22d3ee' },
             };
@@ -224,7 +264,7 @@ function buildNodesAndEdges(
               source: resolvedId,
               sourceHandle: `${resolvedId}-${linkKey}`,
               target: targetNodeId,
-              type: 'smoothstep',
+              type: edgeStyle,
               style: { stroke: color, strokeWidth: 2 },
               markerEnd: { type: MarkerType.ArrowClosed, color },
             };
@@ -304,7 +344,7 @@ function buildNodesAndEdges(
           source: resolvedId,
           sourceHandle: `${resolvedId}-${linkKey}`,
           target: targetNodeId,
-          type: 'smoothstep' as const,
+          type: edgeStyle,
           style: { stroke: color, strokeWidth: 2 },
           markerEnd: { type: MarkerType.ArrowClosed, color },
         };
@@ -369,8 +409,8 @@ function buildNodesAndEdges(
             source: nodeId,
             sourceHandle: `${nodeId}-${field.name}`,
             target: targetNodeId,
-            type: 'smoothstep',
-            animated: true,
+            type: edgeStyle,
+            animated: edgeStyle === 'smoothstep',
             style: { stroke: '#22d3ee', strokeWidth: 2 },
             markerEnd: { type: MarkerType.ArrowClosed, color: '#22d3ee' },
           };
@@ -380,13 +420,37 @@ function buildNodesAndEdges(
     });
   });
 
-  return getLayoutedElements(nodes, Array.from(edgeMap.values()));
+  return getLayoutedElements(nodes, Array.from(edgeMap.values()), manualPositions, currentNodePositions);
 }
 
 const MemoryCanvas: React.FC<MemoryCanvasProps> = ({ snapshot }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [collapsedNodes, setCollapsedNodes] = React.useState<Set<string>>(new Set());
+  const [edgeStyle, setEdgeStyle] = React.useState<EdgeStyle>(() => {
+    return (localStorage.getItem('ds-edge-style') as EdgeStyle) || 'smoothstep';
+  });
+  const [layoutVersion, setLayoutVersion] = React.useState(0);
+  const manualPositions = React.useRef<Map<string, { x: number; y: number }>>(new Map());
+  const nodePositionsRef = React.useRef<Map<string, { x: number; y: number }>>(new Map());
+
+  // Sync ref with current node positions without triggering re-renders
+  if (nodes.length > 0) {
+    nodePositionsRef.current = new Map(nodes.map((n) => [n.id, { x: n.position.x, y: n.position.y }]));
+  }
+
+  const handleNodeDragStop = useCallback((_event: any, node: Node) => {
+    manualPositions.current.set(node.id, { x: node.position.x, y: node.position.y });
+  }, []);
+
+  const handleResetLayout = useCallback(() => {
+    manualPositions.current.clear();
+    setLayoutVersion((v) => v + 1);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('ds-edge-style', edgeStyle);
+  }, [edgeStyle]);
 
   useEffect(() => {
     if (!snapshot) {
@@ -394,10 +458,10 @@ const MemoryCanvas: React.FC<MemoryCanvasProps> = ({ snapshot }) => {
       setEdges([]);
       return;
     }
-    const result = buildNodesAndEdges(snapshot, collapsedNodes, setCollapsedNodes);
+    const result = buildNodesAndEdges(snapshot, collapsedNodes, setCollapsedNodes, edgeStyle, manualPositions.current, nodePositionsRef.current);
     setNodes(result.nodes);
     setEdges(result.edges);
-  }, [snapshot, collapsedNodes, setNodes, setEdges]);
+  }, [snapshot, collapsedNodes, edgeStyle, layoutVersion, setNodes, setEdges]);
 
   if (!snapshot) {
     return (
@@ -427,6 +491,7 @@ const MemoryCanvas: React.FC<MemoryCanvasProps> = ({ snapshot }) => {
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onNodeDragStop={handleNodeDragStop}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.2 }}
@@ -435,6 +500,23 @@ const MemoryCanvas: React.FC<MemoryCanvasProps> = ({ snapshot }) => {
         maxZoom={2}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#1a1e35" />
+        <Panel position="top-right">
+          <div className="edge-style-panel">
+            {(['smoothstep', 'straight', 'default'] as EdgeStyle[]).map((style) => (
+              <button
+                key={style}
+                className={`edge-style-btn${edgeStyle === style ? ' edge-style-btn--active' : ''}`}
+                onClick={() => setEdgeStyle(style)}
+              >
+                {style === 'smoothstep' ? 'Grid' : style === 'straight' ? 'Straight' : 'Curved'}
+              </button>
+            ))}
+            <span className="edge-style-panel__divider" />
+            <button className="edge-style-btn edge-style-btn--reset" onClick={handleResetLayout}>
+              Reset Layout
+            </button>
+          </div>
+        </Panel>
       </ReactFlow>
     </div>
   );

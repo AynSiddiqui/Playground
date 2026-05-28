@@ -80,3 +80,57 @@ The UI SHALL fully render the internal contents of Standard Template Library (ST
 - **THEN** the type shown in the variable row SHALL use the simplified type string
 - **AND** the raw GDB type SHALL be available on hover via a tooltip
 
+### Requirement: Configurable Edge Styles
+The memory visualizer canvas SHALL provide a user interface element allowing developers to toggle between Grid, Straight, and Curved edge connection styles. The selected configuration MUST be persisted locally in the browser storage and automatically applied to all pointer and reference lines on canvas reload or snapshot changes.
+
+#### Scenario: Toggling line style to Curved
+- **WHEN** the user selects the Curved option in the line style control panel
+- **THEN** all stack-to-heap and heap-to-heap connection lines are rendered as Bezier curves
+- **AND** the preference is saved in localStorage
+
+#### Scenario: Persisting line style preference
+- **WHEN** the page is reloaded
+- **THEN** the memory canvas retrieves the saved edge styling preference from localStorage
+- **AND** initializes the visualizer canvas with the saved edge style
+
+### Requirement: Persisted Manual Layout Placements
+The memory visualizer canvas SHALL preserve manually dragged node coordinates across execution snapshot transitions. When a node is dragged to a custom location, its custom coordinates MUST be retained when stepping forward or backward in the debugger timeline.
+
+#### Scenario: Retaining custom node coordinates after stepping
+- **WHEN** the user drags a memory node to a new location on the canvas
+- **AND** the debugger steps to the next snapshot
+- **THEN** the memory node remains at the custom dragged coordinates instead of resetting to the default auto-layout position
+
+#### Scenario: Placement of new memory allocations
+- **WHEN** a new heap object node is allocated in a new snapshot
+- **THEN** it is positioned automatically by the layout engine
+- **AND** existing manually positioned nodes retain their custom coordinates
+
+### Requirement: Layout Position Reset
+The visualizer canvas SHALL provide a mechanism to reset all node coordinates.
+
+#### Scenario: Resetting visual layout coordinates
+- **WHEN** the user triggers the reset layout action
+- **THEN** all manually dragged node coordinates are cleared
+- **AND** the canvas recomputes and applies the default auto-layout positions for all active nodes
+
+### Requirement: Row-Aligned Source Handles
+The visualizer canvas SHALL center all source handles vertically on the right edge of their corresponding variable or field rows. The handle vertical offset MUST adapt dynamically to any variation in row height caused by font changes, line wrapping, or padding adjustments, without using hardcoded pixel math.
+
+#### Scenario: Aligning handles to dynamic height rows
+- **WHEN** a memory node containing multiple pointer fields is rendered
+- **THEN** every source connection handle on the right edge aligns exactly with the vertical center of its corresponding row
+- **AND** the handle positions remain centered even if row heights vary
+
+### Requirement: Parent-Relative Node Spawning
+The visualizer canvas SHALL initialize the position of newly spawned memory nodes relative to their parent node's coordinates. The spawn location MUST align with the structure type, placing binary tree children below the parent and linked list nodes to the right of the parent, preventing canvas jumps.
+
+#### Scenario: Spawning tree left and right children below the parent
+- **WHEN** a binary tree node allocates new left and right child nodes in a snapshot
+- **THEN** the left child node initializes at an offset below and to the left of the parent node
+- **AND** the right child node initializes at an offset below and to the right of the parent node
+
+#### Scenario: Spawning linked list nodes to the right
+- **WHEN** a linked list node allocates a new next node in a snapshot
+- **THEN** the new next node initializes at an offset directly to the right of the parent node
+
