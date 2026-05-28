@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "skills": {
+    "compression": {
+      "source": "patternsdev/skills",
+      "sourceType": "github",
+      "skillPath": "javascript/compression/SKILL.md",
+      "computedHash": "a1447d657743dd66ef190f692379f75b4528b6b1ab8e4e321cd97ac54f2b2aba"
+    },
+    "context-manager": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "skillPath": "skills/context-manager/SKILL.md",
+      "computedHash": "e429bfe8f3bb7b43a118b1cde1457a28844bca749f9df75b5bf147c76148980a"
+    },
+    "deep-agents-memory": {
+      "source": "langchain-ai/langchain-skills",
+      "sourceType": "github",
+      "skillPath": "config/skills/deep-agents-memory/SKILL.md",
+      "computedHash": "cd4f906c303a13bb740ce310a9918bbaac190150fe2e943c5c3ddea010417a69"
+    },
+    "fleet-auditor": {
+      "source": "alexgreensh/token-optimizer",
+      "sourceType": "github",
+      "skillPath": "skills/fleet-auditor/SKILL.md",
+      "computedHash": "df3f4621eb54d88895a46688d1aea17b51a74a72b7793752cdb60e31cb39a715"
+    },
+    "token-coach": {
+      "source": "alexgreensh/token-optimizer",
+      "sourceType": "github",
+      "skillPath": "skills/token-coach/SKILL.md",
+      "computedHash": "2295367684a0be7cbc161020de48e5a3e6c6c3c6a4147085a6df7aa74bf765e5"
+    },
+    "token-dashboard": {
+      "source": "alexgreensh/token-optimizer",
+      "sourceType": "github",
+      "skillPath": "skills/token-dashboard/SKILL.md",
+      "computedHash": "935c9f2b3fcc509982e3ba45d8dfa9e606c02a78fac1541cebcd7842f66d9114"
+    },
+    "token-optimizer": {
+      "source": "alexgreensh/token-optimizer",
+      "sourceType": "github",
+      "skillPath": "skills/token-optimizer/SKILL.md",
+      "computedHash": "5d34e114bb0ac4a9a64be209ce20cfc146ca9678a686e7e6760b1038d69bcfe6"
+    }
+  }
+}

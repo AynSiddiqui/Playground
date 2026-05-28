@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "skill": {
+      "token-*": "allow",
+      "compression": "allow",
+      "deep-agents-memory": "allow",
+      "context-manager": "allow",
+      "fleet-auditor": "allow"
+    }
+  },
+  "agent": {
+    "build": {
+      "permission": {
+        "skill": {
+          "*": "allow"
+        }
+      }
+    }
+  }
+}
