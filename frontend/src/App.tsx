@@ -46,11 +46,16 @@ function App() {
     sendStart,
     sendStep,
     sendStop,
+    sendCommand,
     disconnect,
     isConnected,
     status,
     error,
   } = useWebSocket(handleSnapshot, handleFinished);
+
+  const handleSnapshotReady = useCallback(() => {
+    sendCommand({ command: 'snapshot_ready' });
+  }, [sendCommand]);
 
   const handleGlobalReset = useCallback(() => {
     disconnect();
@@ -180,7 +185,7 @@ function App() {
           <div className="pane__body">
             <ErrorBoundary onReset={handleGlobalReset}>
               <ReactFlowProvider>
-                <MemoryCanvas snapshot={currentSnapshot} />
+                <MemoryCanvas snapshot={currentSnapshot} onSnapshotReady={handleSnapshotReady} />
               </ReactFlowProvider>
             </ErrorBoundary>
           </div>

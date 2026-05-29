@@ -7,6 +7,7 @@ interface UseWebSocketReturn {
   sendStart: (code: string) => void;
   sendStep: () => void;
   sendStop: () => void;
+  sendCommand: (msg: ClientMessage) => void;
   isConnected: boolean;
   status: string;
   error: string | null;
@@ -66,6 +67,10 @@ export function useWebSocket(
           case 'LAUNCH_SUCCESS':
             setStatus('ready');
             setError(null);
+            break;
+          case 'reconnecting':
+            setStatus('reconnecting');
+            setError('Connection lost, reconnecting...');
             break;
           case 'status':
             setStatus(msg.state ?? 'unknown');
@@ -136,6 +141,7 @@ export function useWebSocket(
     sendStart,
     sendStep,
     sendStop,
+    sendCommand: send,
     isConnected,
     status,
     error,

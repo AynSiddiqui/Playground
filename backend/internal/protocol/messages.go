@@ -14,7 +14,7 @@ type ClientMessage struct {
 
 // ServerMessage is the envelope for all messages sent from server to client.
 type ServerMessage struct {
-	Event   string             `json:"event"`             // "status", "error", "snapshot", "finished"
+	Event   string             `json:"event"`             // "status", "error", "snapshot", "finished", "reconnecting"
 	State   string             `json:"state,omitempty"`   // For "status": "compiling", "ready", etc.
 	Message string             `json:"message,omitempty"` // For "error"
 	Data    *debugger.Snapshot `json:"data,omitempty"`    // For "snapshot"
@@ -37,4 +37,8 @@ func SnapshotMessage(data *debugger.Snapshot) ServerMessage {
 
 func FinishedMessage(exitCode int) ServerMessage {
 	return ServerMessage{Event: "finished", ExitCode: &exitCode}
+}
+
+func ReconnectingMessage() ServerMessage {
+	return ServerMessage{Event: "reconnecting"}
 }

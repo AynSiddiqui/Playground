@@ -22,6 +22,7 @@ type GDBDebugger struct {
 	stepNum  int
 	running  bool
 	binPath  string
+	version  string
 }
 
 // NewGDBDebugger creates a new GDB debugger instance.
@@ -68,7 +69,15 @@ func (g *GDBDebugger) Start(binaryPath string) error {
 	g.running = true
 
 	// Wait for GDB to be ready (consume initial output until we see the prompt)
-	g.consumeUntilPrompt()
+	startupLines := g.consumeUntilPrompt()
+
+	// Extract GDB version from startup banner
+	g.version = extractGDBVersion(startupLines)
+	if g.version != "" {
+		log.Printf("GDB version: %s", g.version)
+	} else {
+		log.Println("GDB version: unknown (could not parse from startup banner)")
+	}
 
 	// Explicitly load the Python pretty printers and advanced dump scripts
 	// Mount maps backend root to /backend
@@ -985,4 +994,56 @@ var _ Debugger = (*GDBDebugger)(nil)
 // MarshalSnapshot converts a snapshot to JSON bytes.
 func MarshalSnapshot(s *Snapshot) ([]byte, error) {
 	return json.Marshal(s)
+}
+
+// Version returns the detected GDB version string.
+func (g *GDBDebugger) Version() string {
+	return g.version
+}
+
+// extractGDBVersion scans GDB MI startup output for the version string.
+// Typical input: ~"GNU gdb (Ubuntu 12.1-0ubuntu1~22.04) 12.1\n"
+func extractGDBVersion(lines []string) string {
+	for _, line := range lines {
+		if !strings.Contains(line, "GNU gdb") {
+			continue
+		}
+		var major, minor int
+		for i := 0; i < len(line); i++ {
+			if line[i] >= '0' && line[i] <= '9' {
+				n, err := fmt.Sscanf(line[i:], "%d.%d", &major, &minor)
+				if err == nil && n >= 2 {
+					return fmt.Sprintf("%d.%d", major, minor)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// HealthCheck verifies GDB is responsive by sending "info threads".
+func (g *GDBDebugger) HealthCheck() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if !g.running {
+		return fmt.Errorf("debugger not running")
+	}
+
+	if err := g.sendCommand(`-interpreter-exec console "info threads"`); err != nil {
+		return fmt.Errorf("health check send failed: %w", err)
+	}
+
+	lines := g.consumeUntilPrompt()
+	if len(lines) == 0 {
+		return fmt.Errorf("health check got empty response")
+	}
+
+	for _, line := range lines {
+		if strings.Contains(line, "^error") {
+			return fmt.Errorf("health check gdb error: %s", line)
+		}
+	}
+
+	return nil
 }

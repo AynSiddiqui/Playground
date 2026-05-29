@@ -105,6 +105,26 @@ def clean_gdb_value(val):
     return str(val)
 
 
+def is_valid_vector(val):
+    """Check if standard vector pointers are initialized and valid."""
+    try:
+        impl = val["_M_impl"]
+        start = int(impl["_M_start"])
+        finish = int(impl["_M_finish"])
+        eos = int(impl["_M_end_of_storage"])
+        if start == 0:
+            return finish == 0 and eos == 0
+        if not (start <= finish <= eos):
+            return False
+        size = finish - start
+        capacity = eos - start
+        if size < 0 or capacity < 0 or size > 100000 or capacity > 100000:
+            return False
+        return True
+    except Exception:
+        return True
+
+
 def classify_variable(var):
     """Classify a GDB value into a structural type tag.
 
@@ -266,6 +286,15 @@ def flatten_stl_container(val):
         return None
 
     clean_str = "".join(type_str.split())
+
+    # Resolve container adapters to their underlying container 'c' first
+    if clean_str.startswith("std::stack") or clean_str.startswith("std::queue") or clean_str.startswith("std::priority_queue"):
+        try:
+            val = val["c"]
+            type_str = get_clean_type_str(val.type)
+            clean_str = "".join(type_str.split())
+        except Exception:
+            pass
     
     stl_type = None
     if clean_str.startswith("std::vector<std::vector"):
@@ -292,6 +321,10 @@ def flatten_stl_container(val):
     result = {"type": stl_type, "container_type": type_str}
 
     if stl_type == "MATRIX_2D":
+        if not is_valid_vector(val):
+            result["rows"] = []
+            result["dimensions"] = [0, 0]
+            return result
         rows = []
         try:
             impl = val["_M_impl"]
@@ -300,6 +333,9 @@ def flatten_stl_container(val):
             size = int(finish - start)
             for i in range(min(size, 100)):
                 row_val = start[i]
+                if not is_valid_vector(row_val):
+                    rows.append([])
+                    continue
                 try:
                     row_impl = row_val["_M_impl"]
                     row_start = row_impl["_M_start"]
@@ -375,6 +411,11 @@ def flatten_stl_container(val):
         return result
 
     if stl_type == "ARRAY_1D":
+        if "vector" in clean_str:
+            if not is_valid_vector(val):
+                result["elements"] = []
+                result["dimensions"] = [0]
+                return result
         elements = []
         try:
             impl = val["_M_impl"]
@@ -528,6 +569,12 @@ class STLDumpCommand(gdb.Command):
     def _extract_vector(self, val):
         """Extract std::vector elements."""
         elements = []
+        if not is_valid_vector(val):
+            return {
+                "type": "std::vector",
+                "size": 0,
+                "elements": []
+            }
         try:
             # Access internal pointers of std::vector
             impl = val["_M_impl"]
@@ -651,6 +698,12 @@ class STLDumpCommand(gdb.Command):
 
             # The underlying container is typically a deque or vector
             if container_type.startswith("std::vector"):
+                if not is_valid_vector(container):
+                    return {
+                        "type": adapter_type,
+                        "size": 0,
+                        "elements": []
+                    }
                 impl = container["_M_impl"]
                 start = impl["_M_start"]
                 finish = impl["_M_finish"]
@@ -762,10 +815,13 @@ class SnapshotCommand(gdb.Command):
         locals_list = []
         try:
             block = frame.block()
+            sal = frame.find_sal()
             while block is not None:
                 for sym in block:
                     if sym.is_argument or sym.is_variable:
                         try:
+                            if not sym.is_argument and sal and getattr(sal, 'line', 0) > 0 and getattr(sym, 'line', 0) > 0 and sal.line <= sym.line:
+                                continue
                             val = sym.value(frame)
                             struct_type = classify_variable(val)
                             local = {

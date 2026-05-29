@@ -2,13 +2,13 @@
 
 // --- Client → Server ---
 export interface ClientMessage {
-  command: 'start' | 'step' | 'stop';
+  command: 'start' | 'step' | 'stop' | 'snapshot_ready';
   code?: string;
 }
 
 // --- Server → Client ---
 export interface ServerMessage {
-  event: 'status' | 'error' | 'snapshot' | 'finished' | 'LAUNCH_SUCCESS';
+  event: 'status' | 'error' | 'snapshot' | 'finished' | 'LAUNCH_SUCCESS' | 'reconnecting';
   state?: 'compiling' | 'launching' | 'ready' | 'stopped';
   message?: string;
   data?: Snapshot;

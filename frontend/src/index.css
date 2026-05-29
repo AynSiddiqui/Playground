@@ -600,6 +600,15 @@ body {
   align-self: center;
 }
 
+.edge-style-btn--center {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.edge-style-btn--center:hover {
+  color: var(--accent-cyan);
+}
+
 .edge-style-btn--reset {
   color: var(--text-muted);
   font-size: 11px;

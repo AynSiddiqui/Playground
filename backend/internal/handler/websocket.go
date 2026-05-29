@@ -15,6 +15,13 @@ import (
 	"github.com/cpp-memory-visualizer/backend/internal/sandbox"
 )
 
+const (
+	healthCheckInterval  = 5 * time.Second
+	healthCheckMaxFails  = 2
+	ackSafetyTimeout     = 5 * time.Second
+	reconnectDelay       = 500 * time.Millisecond
+)
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // Allow all origins for development
@@ -23,11 +30,16 @@ var upgrader = websocket.Upgrader{
 
 // Session represents a single debugger session tied to a WebSocket connection.
 type Session struct {
-	conn    *websocket.Conn
-	sandbox *sandbox.Sandbox
-	dbg     debugger.Debugger
-	mu      sync.Mutex
-	active  bool
+	conn          *websocket.Conn
+	sandbox       *sandbox.Sandbox
+	dbg           debugger.Debugger
+	mu            sync.Mutex
+	active        bool
+	code          string
+	cancel        context.CancelFunc
+	snapshotQueue []*debugger.Snapshot
+	awaitingAck   bool
+	ackTimer      *time.Timer
 }
 
 // HandleWebSocket upgrades HTTP connections to WebSocket and manages debugger sessions.
@@ -77,6 +89,8 @@ func (s *Session) handleMessage(msg protocol.ClientMessage) {
 		s.handleStep()
 	case "stop":
 		s.handleStop()
+	case "snapshot_ready":
+		s.handleSnapshotReady()
 	default:
 		s.sendError("Unknown command: " + msg.Command)
 	}
@@ -87,6 +101,12 @@ func (s *Session) handleStart(msg protocol.ClientMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Cancel any existing health check context
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+
 	// Clean up any existing session
 	s.cleanupLocked()
 
@@ -94,6 +114,9 @@ func (s *Session) handleStart(msg protocol.ClientMessage) {
 		s.sendErrorLocked("No source code provided")
 		return
 	}
+
+	// Store code for potential reconnection
+	s.code = msg.Code
 
 	// Notify: compiling
 	log.Println("Compiling user code...")
@@ -130,6 +153,11 @@ func (s *Session) handleStart(msg protocol.ClientMessage) {
 	s.dbg = gdb
 	s.active = true
 
+	// Start health check goroutine
+	healthCtx, healthCancel := context.WithCancel(context.Background())
+	s.cancel = healthCancel
+	go s.startHealthCheck(healthCtx, healthCancel)
+
 	log.Println("GDB Initialized, fetching initial snapshot...")
 	// Send initial snapshot (paused at main)
 	snapshot, err := gdb.GetSnapshot()
@@ -140,7 +168,7 @@ func (s *Session) handleStart(msg protocol.ClientMessage) {
 
 	s.sendMessageLocked(protocol.StatusMessage("ready"))
 	s.sendMessageLocked(protocol.ServerMessage{Event: "LAUNCH_SUCCESS"})
-	s.sendMessageLocked(protocol.SnapshotMessage(snapshot))
+	s.sendSnapshotLocked(snapshot)
 }
 
 // handleStep advances execution by one line and sends the new snapshot.
@@ -164,7 +192,7 @@ func (s *Session) handleStep() {
 		return
 	}
 
-	s.sendMessageLocked(protocol.SnapshotMessage(snapshot))
+	s.sendSnapshotLocked(snapshot)
 }
 
 // handleStop terminates the current debugging session.
@@ -216,6 +244,16 @@ func (s *Session) cleanup() {
 // cleanupLocked releases all resources (must be called with lock held).
 func (s *Session) cleanupLocked() {
 	s.active = false
+	s.awaitingAck = false
+	s.snapshotQueue = nil
+	if s.ackTimer != nil {
+		s.ackTimer.Stop()
+		s.ackTimer = nil
+	}
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	if s.dbg != nil {
 		s.dbg.Stop()
 		s.dbg = nil
@@ -224,4 +262,119 @@ func (s *Session) cleanupLocked() {
 		s.sandbox.Cleanup()
 		s.sandbox = nil
 	}
+}
+
+// --- Health probes ---
+
+// startHealthCheck periodically verifies GDB responsiveness.
+// On maxFailures consecutive failures it triggers a reconnect.
+func (s *Session) startHealthCheck(ctx context.Context, cancel context.CancelFunc) {
+	log.Println("Health check goroutine started")
+	defer log.Println("Health check goroutine stopped")
+
+	// Initial delay before first check to let the session settle
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(healthCheckInterval):
+	}
+
+	ticker := time.NewTicker(healthCheckInterval)
+	defer ticker.Stop()
+
+	var failures int
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			dbg := s.dbg
+			s.mu.Unlock()
+
+			if dbg == nil {
+				continue
+			}
+
+			gdb, ok := dbg.(*debugger.GDBDebugger)
+			if !ok {
+				continue
+			}
+			if err := gdb.HealthCheck(); err != nil {
+				failures++
+				log.Printf("Health check failed (%d/%d): %v", failures, healthCheckMaxFails, err)
+				if failures >= healthCheckMaxFails {
+					log.Println("Health check: max failures reached, initiating reconnect")
+					cancel()
+					s.reconnect()
+					return
+				}
+			} else {
+				if failures > 0 {
+					log.Printf("Health check recovered after %d failures", failures)
+				}
+				failures = 0
+			}
+		}
+	}
+}
+
+// reconnect tears down and restarts the debugger session after health check failure.
+func (s *Session) reconnect() {
+	s.mu.Lock()
+	s.sendMessageLocked(protocol.ReconnectingMessage())
+	s.mu.Unlock()
+
+	time.Sleep(reconnectDelay)
+
+	s.handleStart(protocol.ClientMessage{Command: "start", Code: s.code})
+}
+
+// --- ACK-based backpressure ---
+
+// sendSnapshotLocked queues or sends a snapshot depending on ACK state.
+// Must be called with s.mu held.
+func (s *Session) sendSnapshotLocked(snapshot *debugger.Snapshot) {
+	if s.awaitingAck {
+		s.snapshotQueue = append(s.snapshotQueue, snapshot)
+		return
+	}
+
+	s.sendMessageLocked(protocol.SnapshotMessage(snapshot))
+	s.awaitingAck = true
+
+	if s.ackTimer != nil {
+		s.ackTimer.Stop()
+	}
+	s.ackTimer = time.AfterFunc(ackSafetyTimeout, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.awaitingAck {
+			log.Println("ACK timeout: forcing queue flush")
+			s.awaitingAck = false
+			s.flushSnapshotQueueLocked()
+		}
+	})
+}
+
+// flushSnapshotQueueLocked sends the next queued snapshot, if any.
+// Must be called with s.mu held.
+func (s *Session) flushSnapshotQueueLocked() {
+	if len(s.snapshotQueue) > 0 {
+		next := s.snapshotQueue[0]
+		s.snapshotQueue = s.snapshotQueue[1:]
+		s.sendSnapshotLocked(next)
+	}
+}
+
+// handleSnapshotReady processes the client's snapshot_ready ACK.
+func (s *Session) handleSnapshotReady() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.ackTimer != nil {
+		s.ackTimer.Stop()
+	}
+	s.awaitingAck = false
+	s.flushSnapshotQueueLocked()
 }
